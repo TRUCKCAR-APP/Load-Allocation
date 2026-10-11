@@ -11,6 +11,7 @@ public interface IFreightLoadService {
     FreightLoadResponse publishLoad(CreateFreightLoadRequest request);
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
     FreightLoadResponse notifyAssignment(Long loadId);
+    boolean applyAssignmentNotified(Long loadId, String notifiedDriverId);
     FreightLoadResponse acceptAssignment(Long loadId);
     FreightLoadResponse rejectAssignment(Long loadId);
     FreightLoadResponse timeoutAssignment(Long loadId);

@@ -87,6 +87,31 @@ public class FreightLoadService implements IFreightLoadService {
                 "assignment.notified");
     }
 
+    /**
+     * Aplica el evento assignment.notified de Notifications de forma idempotente:
+     * ignora redeliveries (ya NOTIFIED), propuestas de otro conductor y estados que no admiten la transición.
+     */
+    @Override
+    @Transactional
+    public boolean applyAssignmentNotified(Long loadId, String notifiedDriverId) {
+        FreightLoad load = repository.findById(loadId).orElse(null);
+        if (load == null) {
+            log.warn("assignment.notified ignorado: la carga #{} no existe", loadId);
+            return false;
+        }
+        if (notifiedDriverId != null && !notifiedDriverId.equals(load.getAssignedDriverId())) {
+            log.info("assignment.notified ignorado para carga #{}: notificó a {} pero la propuesta vigente es de {}",
+                    loadId, notifiedDriverId, load.getAssignedDriverId());
+            return false;
+        }
+        if (load.getAssignmentStatus() != AssignmentStatus.PROPOSED) {
+            log.info("assignment.notified ignorado para carga #{} en estado {}", loadId, load.getAssignmentStatus());
+            return false;
+        }
+        transitionAssignment(loadId, AssignmentStatus.NOTIFIED, AssignmentStatus.PROPOSED, "assignment.notified");
+        return true;
+    }
+
     @Override
     @Transactional
     public FreightLoadResponse acceptAssignment(Long loadId) {

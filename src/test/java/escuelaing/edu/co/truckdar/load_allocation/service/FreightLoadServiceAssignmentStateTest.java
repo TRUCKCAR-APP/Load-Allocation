@@ -16,6 +16,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
@@ -57,6 +59,41 @@ class FreightLoadServiceAssignmentStateTest {
         verify(outboxEventService).enqueueLoadEvent(load, "assignment.proposed");
         verify(outboxEventService).enqueueLoadEvent(load, "assignment.notified");
         verify(outboxEventService).enqueueLoadEvent(load, "assignment.accepted");
+    }
+
+    @Test
+    void appliesAssignmentNotifiedOnceAndIgnoresRedelivery() {
+        FreightLoad load = FreightLoad.builder()
+                .id(9L)
+                .status(LoadStatus.AVAILABLE)
+                .assignmentStatus(AssignmentStatus.PROPOSED)
+                .assignedDriverId("driver-42")
+                .build();
+        when(repository.findById(9L)).thenReturn(Optional.of(load));
+        when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+
+        assertThat(service.applyAssignmentNotified(9L, "driver-42")).isTrue();
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.NOTIFIED);
+
+        assertThat(service.applyAssignmentNotified(9L, "driver-42")).isFalse();
+        verify(outboxEventService, times(1)).enqueueLoadEvent(load, "assignment.notified");
+    }
+
+    @Test
+    void ignoresAssignmentNotifiedForStaleCandidate() {
+        FreightLoad load = FreightLoad.builder()
+                .id(10L)
+                .status(LoadStatus.AVAILABLE)
+                .assignmentStatus(AssignmentStatus.PROPOSED)
+                .assignedDriverId("driver-2")
+                .build();
+        when(repository.findById(10L)).thenReturn(Optional.of(load));
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+
+        assertThat(service.applyAssignmentNotified(10L, "driver-1")).isFalse();
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.PROPOSED);
+        verify(outboxEventService, never()).enqueueLoadEvent(any(), any());
     }
 
     @Test
