@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -38,6 +39,9 @@ public class OutboxEventService {
                 .assignedDriverId(load.getAssignedDriverId())
                 .assignedDriverName(load.getAssignedDriverName())
                 .assignedVehiclePlate(load.getAssignedVehiclePlate())
+                .assignmentAttempts(load.getAssignmentAttempts())
+                .excludedDriverIds(load.getDiscardedDriverIds() == null
+                        ? List.of() : List.copyOf(load.getDiscardedDriverIds()))
                 .build();
 
         EventEnvelope<FreightLoadEventPayload> envelope = EventEnvelope.<FreightLoadEventPayload>builder()

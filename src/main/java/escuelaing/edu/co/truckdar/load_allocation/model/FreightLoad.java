@@ -5,6 +5,8 @@ import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Getter
 @Setter
@@ -94,4 +96,21 @@ public class FreightLoad {
 
     @Column(name = "assignment_status_changed_at")
     private LocalDateTime assignmentStatusChangedAt;
+
+    /** Propuestas de conductor realizadas para esta carga (inicial + reasignaciones). */
+    @Builder.Default
+    @Column(name = "assignment_attempts", nullable = false, columnDefinition = "integer default 0")
+    private Integer assignmentAttempts = 0;
+
+    /** Conductores que rechazaron o dejaron vencer la propuesta; no se les vuelve a proponer la carga. */
+    @Builder.Default
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "freight_load_discarded_drivers", joinColumns = @JoinColumn(name = "load_id"))
+    @Column(name = "driver_id", nullable = false)
+    private Set<String> discardedDriverIds = new LinkedHashSet<>();
+
+    /** Bloqueo optimista: evita que el scheduler de TIMEOUT y un accept/reject concurrente pisen el estado. */
+    @Version
+    @Column(name = "version", columnDefinition = "bigint default 0")
+    private Long version;
 }

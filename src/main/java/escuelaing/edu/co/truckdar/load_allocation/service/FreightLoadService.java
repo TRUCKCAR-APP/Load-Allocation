@@ -12,11 +12,14 @@ import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 import escuelaing.edu.co.truckdar.load_allocation.repository.FreightLoadRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -24,8 +27,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class FreightLoadService implements IFreightLoadService {
 
+    private static final Set<AssignmentStatus> REASSIGNABLE =
+            EnumSet.of(AssignmentStatus.REJECTED, AssignmentStatus.TIMEOUT);
+
     private final FreightLoadRepository repository;
     private final OutboxEventService outboxEventService;
+
+    @Value("${truckdar.assignment.max-attempts:5}")
+    private int maxAssignmentAttempts = 5;
 
     @Override
     @Transactional
@@ -67,17 +76,102 @@ public class FreightLoadService implements IFreightLoadService {
             throw new InvalidLoadOperationException("La carga #" + loadId + " no está disponible para asignación (estado actual: " + load.getStatus() + ")");
         }
 
-        load.setAssignedDriverId(request.getDriverId());
-        load.setAssignedDriverName(request.getDriverName());
-        load.setAssignedVehiclePlate(request.getVehiclePlate());
-        load.setAssignmentStatus(AssignmentStatus.PROPOSED);
-        load.setAssignmentStatusChangedAt(LocalDateTime.now());
-
-        FreightLoad updated = repository.save(load);
-        outboxEventService.enqueueLoadEvent(updated, "assignment.proposed");
+        FreightLoad updated = propose(load, request.getDriverId(), request.getDriverName(), request.getVehiclePlate());
         log.info("Propuesta de asignación creada para carga #{} y conductor {}", updated.getId(), request.getDriverName());
 
         return mapToResponse(updated);
+    }
+
+    /**
+     * Aplica una nueva recomendación (agent.score.ready) sobre una carga REJECTED/TIMEOUT de forma idempotente.
+     * Si se agotaron los intentos, la carga pasa a UNASSIGNED_NO_DRIVERS en lugar de proponerse otra vez.
+     */
+    @Override
+    @Transactional
+    public boolean proposeReassignment(Long loadId, String driverId, String driverName, String vehiclePlate) {
+        FreightLoad load = repository.findById(loadId).orElse(null);
+        if (load == null) {
+            log.warn("Recomendación ignorada: la carga #{} no existe", loadId);
+            return false;
+        }
+        if (!REASSIGNABLE.contains(load.getAssignmentStatus())) {
+            log.info("Recomendación ignorada para carga #{} en estado {}", loadId, load.getAssignmentStatus());
+            return false;
+        }
+        if (driverId == null || load.getDiscardedDriverIds().contains(driverId)) {
+            log.info("Recomendación ignorada para carga #{}: el conductor {} ya fue descartado", loadId, driverId);
+            return false;
+        }
+        if (attemptsOf(load) >= maxAssignmentAttempts) {
+            markUnassigned(load, "se alcanzó el límite de " + maxAssignmentAttempts + " intentos");
+            return false;
+        }
+        propose(load, driverId, driverName, vehiclePlate);
+        log.info("Carga #{} reasignada al conductor {} (intento {}/{})",
+                loadId, driverId, load.getAssignmentAttempts(), maxAssignmentAttempts);
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public boolean markNoDriversAvailable(Long loadId) {
+        FreightLoad load = repository.findById(loadId).orElse(null);
+        if (load == null || !REASSIGNABLE.contains(load.getAssignmentStatus())) {
+            log.info("Aviso de falta de candidatos ignorado para carga #{}", loadId);
+            return false;
+        }
+        markUnassigned(load, "el motor de asignación no encontró más candidatos");
+        return true;
+    }
+
+    /** Vence la propuesta solo si sigue NOTIFIED desde antes del corte (evita expirar una propuesta recién renovada). */
+    @Override
+    @Transactional
+    public boolean expireIfUnanswered(Long loadId, LocalDateTime notifiedBefore) {
+        FreightLoad load = repository.findById(loadId).orElse(null);
+        if (load == null
+                || load.getAssignmentStatus() != AssignmentStatus.NOTIFIED
+                || load.getAssignmentStatusChangedAt() == null
+                || !load.getAssignmentStatusChangedAt().isBefore(notifiedBefore)) {
+            return false;
+        }
+        discardCurrentDriver(load);
+        load.setAssignmentStatus(AssignmentStatus.TIMEOUT);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "assignment.timeout");
+        log.info("Propuesta de la carga #{} venció sin respuesta del conductor {}", loadId, load.getAssignedDriverId());
+        return true;
+    }
+
+    private FreightLoad propose(FreightLoad load, String driverId, String driverName, String vehiclePlate) {
+        load.setAssignedDriverId(driverId);
+        load.setAssignedDriverName(driverName);
+        load.setAssignedVehiclePlate(vehiclePlate);
+        load.setAssignmentAttempts(attemptsOf(load) + 1);
+        load.setAssignmentStatus(AssignmentStatus.PROPOSED);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "assignment.proposed");
+        return updated;
+    }
+
+    private void markUnassigned(FreightLoad load, String reason) {
+        load.setAssignmentStatus(AssignmentStatus.UNASSIGNED_NO_DRIVERS);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "assignment.unassigned");
+        log.warn("Carga #{} queda sin conductor: {}", load.getId(), reason);
+    }
+
+    private void discardCurrentDriver(FreightLoad load) {
+        if (load.getAssignedDriverId() != null) {
+            load.getDiscardedDriverIds().add(load.getAssignedDriverId());
+        }
+    }
+
+    private int attemptsOf(FreightLoad load) {
+        return load.getAssignmentAttempts() == null ? 0 : load.getAssignmentAttempts();
     }
 
     @Override
@@ -126,8 +220,11 @@ public class FreightLoadService implements IFreightLoadService {
     @Override
     @Transactional
     public FreightLoadResponse rejectAssignment(Long loadId) {
-        return transitionAssignment(loadId, AssignmentStatus.REJECTED, AssignmentStatus.NOTIFIED,
-                "assignment.rejected");
+        FreightLoad load = transition(loadId, AssignmentStatus.REJECTED, AssignmentStatus.NOTIFIED);
+        discardCurrentDriver(load);
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "assignment.rejected");
+        return mapToResponse(updated);
     }
 
     @Override
@@ -140,6 +237,7 @@ public class FreightLoadService implements IFreightLoadService {
             throw new InvalidLoadOperationException("La propuesta de la carga #" + loadId
                     + " no puede expirar desde el estado " + load.getAssignmentStatus());
         }
+        discardCurrentDriver(load);
         load.setAssignmentStatus(AssignmentStatus.TIMEOUT);
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);

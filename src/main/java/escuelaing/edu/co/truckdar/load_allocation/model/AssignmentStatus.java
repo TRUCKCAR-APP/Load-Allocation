@@ -5,5 +5,6 @@ public enum AssignmentStatus {
     NOTIFIED,
     ACCEPTED,
     REJECTED,
-    TIMEOUT
+    TIMEOUT,
+    UNASSIGNED_NO_DRIVERS
 }

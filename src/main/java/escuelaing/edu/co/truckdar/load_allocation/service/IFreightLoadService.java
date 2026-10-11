@@ -5,6 +5,7 @@ import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadR
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface IFreightLoadService {
@@ -12,6 +13,9 @@ public interface IFreightLoadService {
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
     FreightLoadResponse notifyAssignment(Long loadId);
     boolean applyAssignmentNotified(Long loadId, String notifiedDriverId);
+    boolean proposeReassignment(Long loadId, String driverId, String driverName, String vehiclePlate);
+    boolean markNoDriversAvailable(Long loadId);
+    boolean expireIfUnanswered(Long loadId, LocalDateTime notifiedBefore);
     FreightLoadResponse acceptAssignment(Long loadId);
     FreightLoadResponse rejectAssignment(Long loadId);
     FreightLoadResponse timeoutAssignment(Long loadId);
