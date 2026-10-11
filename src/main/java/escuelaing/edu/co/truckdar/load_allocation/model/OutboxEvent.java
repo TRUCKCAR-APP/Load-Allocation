@@ -12,8 +12,8 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "outbox_events", indexes = {
-        @Index(name = "idx_outbox_unpublished", columnList = "published_at, created_at")
+@Table(name = "load_allocation_outbox_events", indexes = {
+        @Index(name = "idx_load_outbox_unpublished", columnList = "published_at, created_at")
 })
 public class OutboxEvent {
 
