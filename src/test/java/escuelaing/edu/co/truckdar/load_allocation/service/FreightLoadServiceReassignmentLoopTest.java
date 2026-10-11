@@ -51,7 +51,7 @@ class FreightLoadServiceReassignmentLoopTest {
     @Test
     void rejectedLoadIsProposedAgainToNewCandidateAndDiscardsPreviousDriver() {
         proposeAndNotify("driver-1");
-        service.rejectAssignment(21L);
+        service.rejectAssignment(21L, load.getAssignedDriverId());
 
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.REJECTED);
         assertThat(load.getDiscardedDriverIds()).containsExactly("driver-1");
@@ -80,10 +80,10 @@ class FreightLoadServiceReassignmentLoopTest {
     @Test
     void recommendationOfDiscardedDriverIsIgnoredToAvoidPingPong() {
         proposeAndNotify("driver-1");
-        service.rejectAssignment(21L);
+        service.rejectAssignment(21L, load.getAssignedDriverId());
         service.proposeReassignment(21L, "driver-2", "Driver Two", "XYZ987");
         service.applyAssignmentNotified(21L, "driver-2");
-        service.rejectAssignment(21L);
+        service.rejectAssignment(21L, load.getAssignedDriverId());
 
         boolean proposed = service.proposeReassignment(21L, "driver-1", "Driver One", "ABC123");
 
@@ -96,11 +96,11 @@ class FreightLoadServiceReassignmentLoopTest {
     void exceedingMaxAttemptsMarksLoadUnassignedNoDrivers() {
         proposeAndNotify("driver-1");
         for (int attempt = 2; attempt <= 5; attempt++) {
-            service.rejectAssignment(21L);
+            service.rejectAssignment(21L, load.getAssignedDriverId());
             assertThat(service.proposeReassignment(21L, "driver-" + attempt, "Driver", "PLATE")).isTrue();
             service.applyAssignmentNotified(21L, "driver-" + attempt);
         }
-        service.rejectAssignment(21L);
+        service.rejectAssignment(21L, load.getAssignedDriverId());
 
         boolean proposed = service.proposeReassignment(21L, "driver-6", "Driver Six", "PLATE6");
 
@@ -113,7 +113,7 @@ class FreightLoadServiceReassignmentLoopTest {
     @Test
     void noCandidatesMarksRejectedLoadUnassigned() {
         proposeAndNotify("driver-1");
-        service.rejectAssignment(21L);
+        service.rejectAssignment(21L, load.getAssignedDriverId());
 
         assertThat(service.markNoDriversAvailable(21L)).isTrue();
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.UNASSIGNED_NO_DRIVERS);

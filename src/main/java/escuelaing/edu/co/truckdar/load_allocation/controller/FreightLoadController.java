@@ -21,6 +21,8 @@ import java.util.UUID;
 @CrossOrigin(origins = "*")
 public class FreightLoadController {
 
+    private static final String AUTH_USER_HEADER = "X-Auth-User";
+
     private final IFreightLoadService service;
 
     @PostMapping
@@ -45,14 +47,19 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.notifyAssignment(loadId));
     }
 
+    /** X-Auth-User lo fija el api-gateway con el sujeto del JWT; debe coincidir con el conductor asignado. */
     @PatchMapping("/{loadId}/assignment/accept")
-    public ResponseEntity<FreightLoadResponse> acceptAssignment(@PathVariable Long loadId) {
-        return ResponseEntity.ok(service.acceptAssignment(loadId));
+    public ResponseEntity<FreightLoadResponse> acceptAssignment(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.acceptAssignment(loadId, authenticatedUserId));
     }
 
     @PatchMapping("/{loadId}/assignment/reject")
-    public ResponseEntity<FreightLoadResponse> rejectAssignment(@PathVariable Long loadId) {
-        return ResponseEntity.ok(service.rejectAssignment(loadId));
+    public ResponseEntity<FreightLoadResponse> rejectAssignment(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.rejectAssignment(loadId, authenticatedUserId));
     }
 
     @PatchMapping("/{loadId}/assignment/timeout")

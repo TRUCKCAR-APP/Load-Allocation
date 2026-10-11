@@ -3,6 +3,7 @@ package escuelaing.edu.co.truckdar.load_allocation.service;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
+import escuelaing.edu.co.truckdar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckdar.load_allocation.exception.FreightLoadNotFoundException;
 import escuelaing.edu.co.truckdar.load_allocation.exception.InvalidLoadOperationException;
 import escuelaing.edu.co.truckdar.load_allocation.model.FreightLoad;
@@ -74,8 +75,20 @@ public class FreightLoadService implements IFreightLoadService {
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
 
-        if (load.getStatus() != LoadStatus.AVAILABLE || load.getAssignmentStatus() != null) {
-            throw new InvalidLoadOperationException("La carga #" + loadId + " no está disponible para asignación (estado actual: " + load.getStatus() + ")");
+        // Se asigna una carga nueva (sin propuesta) o se reabre una que se quedó sin conductores elegibles.
+        boolean reopening = load.getAssignmentStatus() == AssignmentStatus.UNASSIGNED_NO_DRIVERS;
+        if (load.getStatus() != LoadStatus.AVAILABLE || (load.getAssignmentStatus() != null && !reopening)) {
+            throw new InvalidLoadOperationException("La carga #" + loadId + " no admite una nueva asignación (status="
+                    + load.getStatus() + ", assignmentStatus=" + load.getAssignmentStatus() + ")");
+        }
+        if (load.getDiscardedDriverIds().contains(request.getDriverId())) {
+            throw new InvalidLoadOperationException("El conductor " + request.getDriverId()
+                    + " ya rechazó o dejó vencer la carga #" + loadId);
+        }
+        if (reopening) {
+            // Nuevo ciclo de asignación: se reinicia el límite de intentos y se conservan los conductores descartados.
+            load.setAssignmentAttempts(0);
+            log.info("Carga #{} reabierta desde UNASSIGNED_NO_DRIVERS para el conductor {}", loadId, request.getDriverId());
         }
 
         FreightLoad updated = propose(load, request.getDriverId(), request.getDriverName(), request.getVehiclePlate());
@@ -210,7 +223,8 @@ public class FreightLoadService implements IFreightLoadService {
 
     @Override
     @Transactional
-    public FreightLoadResponse acceptAssignment(Long loadId) {
+    public FreightLoadResponse acceptAssignment(Long loadId, String authenticatedUserId) {
+        requireAssignedDriver(loadId, authenticatedUserId, "aceptar");
         FreightLoad load = transition(loadId, AssignmentStatus.ACCEPTED, AssignmentStatus.NOTIFIED);
         load.setStatus(LoadStatus.ASSIGNED);
         load.setAssignedAt(LocalDateTime.now());
@@ -221,12 +235,30 @@ public class FreightLoadService implements IFreightLoadService {
 
     @Override
     @Transactional
-    public FreightLoadResponse rejectAssignment(Long loadId) {
+    public FreightLoadResponse rejectAssignment(Long loadId, String authenticatedUserId) {
+        requireAssignedDriver(loadId, authenticatedUserId, "rechazar");
         FreightLoad load = transition(loadId, AssignmentStatus.REJECTED, AssignmentStatus.NOTIFIED);
         discardCurrentDriver(load);
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.rejected");
         return mapToResponse(updated);
+    }
+
+    /**
+     * Solo el conductor propuesto puede aceptar o rechazar su carga. El api-gateway propaga el sujeto
+     * del JWT en X-Auth-User (y descarta cualquier valor enviado por el cliente).
+     */
+    private void requireAssignedDriver(Long loadId, String authenticatedUserId, String action) {
+        if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
+            throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para " + action
+                    + " la carga #" + loadId, true);
+        }
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (!authenticatedUserId.equals(load.getAssignedDriverId())) {
+            throw new AssignmentAccessDeniedException("El usuario " + authenticatedUserId + " no es el conductor asignado a la carga #"
+                    + loadId + "; no puede " + action + "la", false);
+        }
     }
 
     @Override
@@ -321,6 +353,8 @@ public class FreightLoadService implements IFreightLoadService {
                 .assignedAt(entity.getAssignedAt())
                 .assignmentStatusChangedAt(entity.getAssignmentStatusChangedAt())
                 .correlationId(entity.getCorrelationId())
+                .assignmentAttempts(entity.getAssignmentAttempts())
+                .discardedDriverIds(entity.getDiscardedDriverIds() == null ? List.of() : List.copyOf(entity.getDiscardedDriverIds()))
                 .build();
     }
 }

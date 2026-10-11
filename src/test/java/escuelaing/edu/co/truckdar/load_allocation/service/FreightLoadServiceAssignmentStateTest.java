@@ -1,6 +1,7 @@
 package escuelaing.edu.co.truckdar.load_allocation.service;
 
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
+import escuelaing.edu.co.truckdar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckdar.load_allocation.exception.InvalidLoadOperationException;
 import escuelaing.edu.co.truckdar.load_allocation.model.AssignmentStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.FreightLoad;
@@ -52,7 +53,7 @@ class FreightLoadServiceAssignmentStateTest {
         service.notifyAssignment(7L);
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.NOTIFIED);
 
-        service.acceptAssignment(7L);
+        service.acceptAssignment(7L, "driver-7");
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.ACCEPTED);
         assertThat(load.getStatus()).isEqualTo(LoadStatus.ASSIGNED);
 
@@ -102,12 +103,80 @@ class FreightLoadServiceAssignmentStateTest {
                 .id(8L)
                 .status(LoadStatus.AVAILABLE)
                 .assignmentStatus(AssignmentStatus.PROPOSED)
+                .assignedDriverId("driver-8")
                 .build();
         when(repository.findById(8L)).thenReturn(Optional.of(load));
         FreightLoadService service = new FreightLoadService(repository, outboxEventService);
 
-        assertThatThrownBy(() -> service.acceptAssignment(8L))
+        assertThatThrownBy(() -> service.acceptAssignment(8L, "driver-8"))
                 .isInstanceOf(InvalidLoadOperationException.class);
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.PROPOSED);
+    }
+
+    @Test
+    void onlyTheAssignedDriverCanAcceptOrReject() {
+        FreightLoad load = FreightLoad.builder()
+                .id(11L)
+                .status(LoadStatus.AVAILABLE)
+                .assignmentStatus(AssignmentStatus.NOTIFIED)
+                .assignedDriverId("driver-11")
+                .build();
+        when(repository.findById(11L)).thenReturn(Optional.of(load));
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+
+        assertThatThrownBy(() -> service.acceptAssignment(11L, "otro-usuario"))
+                .isInstanceOf(AssignmentAccessDeniedException.class)
+                .satisfies(e -> assertThat(((AssignmentAccessDeniedException) e).isUnauthenticated()).isFalse());
+        assertThatThrownBy(() -> service.rejectAssignment(11L, null))
+                .isInstanceOf(AssignmentAccessDeniedException.class)
+                .satisfies(e -> assertThat(((AssignmentAccessDeniedException) e).isUnauthenticated()).isTrue());
+
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.NOTIFIED);
+        verify(outboxEventService, never()).enqueueLoadEvent(any(), any());
+    }
+
+    @Test
+    void unassignedLoadCanBeReopenedForANewEligibleDriver() {
+        FreightLoad load = FreightLoad.builder()
+                .id(12L)
+                .status(LoadStatus.AVAILABLE)
+                .assignmentStatus(AssignmentStatus.UNASSIGNED_NO_DRIVERS)
+                .assignmentAttempts(5)
+                .assignedDriverId("driver-old")
+                .build();
+        load.getDiscardedDriverIds().add("driver-old");
+        when(repository.findById(12L)).thenReturn(Optional.of(load));
+        when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+
+        assertThatThrownBy(() -> service.assignDriver(12L, AssignDriverRequest.builder()
+                .driverId("driver-old").driverName("Old").vehiclePlate("OLD123").build()))
+                .isInstanceOf(InvalidLoadOperationException.class)
+                .hasMessageContaining("ya rechazó o dejó vencer");
+
+        service.assignDriver(12L, AssignDriverRequest.builder()
+                .driverId("driver-new").driverName("New").vehiclePlate("NEW123").build());
+
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.PROPOSED);
+        assertThat(load.getAssignedDriverId()).isEqualTo("driver-new");
+        assertThat(load.getAssignmentAttempts()).isEqualTo(1);
+        assertThat(load.getDiscardedDriverIds()).containsExactly("driver-old");
+        verify(outboxEventService).enqueueLoadEvent(load, "assignment.proposed");
+    }
+
+    @Test
+    void assignRejectsLoadsWithAnActiveProposalAndReportsTheRealState() {
+        FreightLoad load = FreightLoad.builder()
+                .id(13L)
+                .status(LoadStatus.AVAILABLE)
+                .assignmentStatus(AssignmentStatus.NOTIFIED)
+                .build();
+        when(repository.findById(13L)).thenReturn(Optional.of(load));
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+
+        assertThatThrownBy(() -> service.assignDriver(13L, AssignDriverRequest.builder()
+                .driverId("driver-x").driverName("X").vehiclePlate("XXX111").build()))
+                .isInstanceOf(InvalidLoadOperationException.class)
+                .hasMessageContaining("assignmentStatus=NOTIFIED");
     }
 }

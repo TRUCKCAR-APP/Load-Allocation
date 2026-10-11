@@ -17,8 +17,8 @@ public interface IFreightLoadService {
     boolean proposeReassignment(Long loadId, String driverId, String driverName, String vehiclePlate);
     boolean markNoDriversAvailable(Long loadId);
     boolean expireIfUnanswered(Long loadId, LocalDateTime notifiedBefore);
-    FreightLoadResponse acceptAssignment(Long loadId);
-    FreightLoadResponse rejectAssignment(Long loadId);
+    FreightLoadResponse acceptAssignment(Long loadId, String authenticatedUserId);
+    FreightLoadResponse rejectAssignment(Long loadId, String authenticatedUserId);
     FreightLoadResponse timeoutAssignment(Long loadId);
     FreightLoadResponse getLoadById(Long loadId);
     List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType);
