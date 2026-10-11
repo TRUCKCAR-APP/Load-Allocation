@@ -33,6 +33,26 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.assignDriver(loadId, request));
     }
 
+    @PatchMapping("/{loadId}/assignment/notify")
+    public ResponseEntity<FreightLoadResponse> notifyAssignment(@PathVariable Long loadId) {
+        return ResponseEntity.ok(service.notifyAssignment(loadId));
+    }
+
+    @PatchMapping("/{loadId}/assignment/accept")
+    public ResponseEntity<FreightLoadResponse> acceptAssignment(@PathVariable Long loadId) {
+        return ResponseEntity.ok(service.acceptAssignment(loadId));
+    }
+
+    @PatchMapping("/{loadId}/assignment/reject")
+    public ResponseEntity<FreightLoadResponse> rejectAssignment(@PathVariable Long loadId) {
+        return ResponseEntity.ok(service.rejectAssignment(loadId));
+    }
+
+    @PatchMapping("/{loadId}/assignment/timeout")
+    public ResponseEntity<FreightLoadResponse> timeoutAssignment(@PathVariable Long loadId) {
+        return ResponseEntity.ok(service.timeoutAssignment(loadId));
+    }
+
     @GetMapping("/{loadId}")
     public ResponseEntity<FreightLoadResponse> getLoadById(@PathVariable Long loadId) {
         return ResponseEntity.ok(service.getLoadById(loadId));

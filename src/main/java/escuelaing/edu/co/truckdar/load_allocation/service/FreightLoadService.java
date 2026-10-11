@@ -1,19 +1,17 @@
 package escuelaing.edu.co.truckdar.load_allocation.service;
 
-import escuelaing.edu.co.truckdar.load_allocation.dto.event.FreightLoadPublishedEvent;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.exception.FreightLoadNotFoundException;
 import escuelaing.edu.co.truckdar.load_allocation.exception.InvalidLoadOperationException;
 import escuelaing.edu.co.truckdar.load_allocation.model.FreightLoad;
+import escuelaing.edu.co.truckdar.load_allocation.model.AssignmentStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.LoadStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 import escuelaing.edu.co.truckdar.load_allocation.repository.FreightLoadRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,10 +25,7 @@ import java.util.stream.Collectors;
 public class FreightLoadService implements IFreightLoadService {
 
     private final FreightLoadRepository repository;
-    private final KafkaTemplate<String, Object> kafkaTemplate;
-
-    @Value("${truckdar.kafka.topic.load-events:truckdar.events.load-allocation}")
-    private String loadEventsTopic;
+    private final OutboxEventService outboxEventService;
 
     @Override
     @Transactional
@@ -56,7 +51,7 @@ public class FreightLoadService implements IFreightLoadService {
                 .build();
 
         FreightLoad saved = repository.save(load);
-        publishKafkaEvent(saved, "PUBLISHED");
+        outboxEventService.enqueueLoadEvent(saved, "load.published");
         log.info("Carga publicada #{} por {} ({} Tn)", saved.getId(), saved.getGeneratorCompanyName(), saved.getWeightTons());
 
         return mapToResponse(saved);
@@ -68,21 +63,83 @@ public class FreightLoadService implements IFreightLoadService {
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
 
-        if (load.getStatus() != LoadStatus.AVAILABLE) {
+        if (load.getStatus() != LoadStatus.AVAILABLE || load.getAssignmentStatus() != null) {
             throw new InvalidLoadOperationException("La carga #" + loadId + " no está disponible para asignación (estado actual: " + load.getStatus() + ")");
         }
 
         load.setAssignedDriverId(request.getDriverId());
         load.setAssignedDriverName(request.getDriverName());
         load.setAssignedVehiclePlate(request.getVehiclePlate());
-        load.setStatus(LoadStatus.ASSIGNED);
-        load.setAssignedAt(LocalDateTime.now());
+        load.setAssignmentStatus(AssignmentStatus.PROPOSED);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
 
         FreightLoad updated = repository.save(load);
-        publishKafkaEvent(updated, "ASSIGNED");
-        log.info("Carga #{} asignada al conductor {} (placa: {})", updated.getId(), request.getDriverName(), request.getVehiclePlate());
+        outboxEventService.enqueueLoadEvent(updated, "assignment.proposed");
+        log.info("Propuesta de asignación creada para carga #{} y conductor {}", updated.getId(), request.getDriverName());
 
         return mapToResponse(updated);
+    }
+
+    @Override
+    @Transactional
+    public FreightLoadResponse notifyAssignment(Long loadId) {
+        return transitionAssignment(loadId, AssignmentStatus.NOTIFIED, AssignmentStatus.PROPOSED,
+                "assignment.notified");
+    }
+
+    @Override
+    @Transactional
+    public FreightLoadResponse acceptAssignment(Long loadId) {
+        FreightLoad load = transition(loadId, AssignmentStatus.ACCEPTED, AssignmentStatus.NOTIFIED);
+        load.setStatus(LoadStatus.ASSIGNED);
+        load.setAssignedAt(LocalDateTime.now());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "assignment.accepted");
+        return mapToResponse(updated);
+    }
+
+    @Override
+    @Transactional
+    public FreightLoadResponse rejectAssignment(Long loadId) {
+        return transitionAssignment(loadId, AssignmentStatus.REJECTED, AssignmentStatus.NOTIFIED,
+                "assignment.rejected");
+    }
+
+    @Override
+    @Transactional
+    public FreightLoadResponse timeoutAssignment(Long loadId) {
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (load.getAssignmentStatus() != AssignmentStatus.PROPOSED
+                && load.getAssignmentStatus() != AssignmentStatus.NOTIFIED) {
+            throw new InvalidLoadOperationException("La propuesta de la carga #" + loadId
+                    + " no puede expirar desde el estado " + load.getAssignmentStatus());
+        }
+        load.setAssignmentStatus(AssignmentStatus.TIMEOUT);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "assignment.timeout");
+        return mapToResponse(updated);
+    }
+
+    private FreightLoadResponse transitionAssignment(Long loadId, AssignmentStatus target,
+                                                     AssignmentStatus expected, String eventType) {
+        FreightLoad load = transition(loadId, target, expected);
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, eventType);
+        return mapToResponse(updated);
+    }
+
+    private FreightLoad transition(Long loadId, AssignmentStatus target, AssignmentStatus expected) {
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (load.getAssignmentStatus() != expected) {
+            throw new InvalidLoadOperationException("Transición inválida para la carga #" + loadId
+                    + ": se esperaba " + expected + " pero el estado actual es " + load.getAssignmentStatus());
+        }
+        load.setAssignmentStatus(target);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        return load;
     }
 
     @Override
@@ -112,23 +169,6 @@ public class FreightLoadService implements IFreightLoadService {
                 .collect(Collectors.toList());
     }
 
-    private void publishKafkaEvent(FreightLoad load, String eventType) {
-        FreightLoadPublishedEvent event = FreightLoadPublishedEvent.builder()
-                .loadId(load.getId())
-                .generatorCompanyId(load.getGeneratorCompanyId())
-                .cargoDescription(load.getCargoDescription())
-                .weightTons(load.getWeightTons())
-                .requiredTruckType(load.getRequiredTruckType().name())
-                .originCity(load.getOriginCity())
-                .destinationCity(load.getDestinationCity())
-                .offeredBudget(load.getOfferedBudget())
-                .eventType(eventType)
-                .timestamp(LocalDateTime.now())
-                .build();
-
-        kafkaTemplate.send(loadEventsTopic, load.getId().toString(), event);
-    }
-
     private FreightLoadResponse mapToResponse(FreightLoad entity) {
         return FreightLoadResponse.builder()
                 .id(entity.getId())
@@ -148,11 +188,13 @@ public class FreightLoadService implements IFreightLoadService {
                 .destinationLongitude(entity.getDestinationLongitude())
                 .offeredBudget(entity.getOfferedBudget())
                 .status(entity.getStatus())
+                .assignmentStatus(entity.getAssignmentStatus())
                 .assignedDriverId(entity.getAssignedDriverId())
                 .assignedDriverName(entity.getAssignedDriverName())
                 .assignedVehiclePlate(entity.getAssignedVehiclePlate())
                 .publishedAt(entity.getPublishedAt())
                 .assignedAt(entity.getAssignedAt())
+                .assignmentStatusChangedAt(entity.getAssignmentStatusChangedAt())
                 .build();
     }
 }

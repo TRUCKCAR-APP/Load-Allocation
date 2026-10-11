@@ -1,6 +1,7 @@
 package escuelaing.edu.co.truckdar.load_allocation.dto.response;
 
 import escuelaing.edu.co.truckdar.load_allocation.model.LoadStatus;
+import escuelaing.edu.co.truckdar.load_allocation.model.AssignmentStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -32,9 +33,11 @@ public class FreightLoadResponse {
     private Double destinationLongitude;
     private BigDecimal offeredBudget;
     private LoadStatus status;
+    private AssignmentStatus assignmentStatus;
     private String assignedDriverId;
     private String assignedDriverName;
     private String assignedVehiclePlate;
     private LocalDateTime publishedAt;
     private LocalDateTime assignedAt;
+    private LocalDateTime assignmentStatusChangedAt;
 }

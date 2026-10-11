@@ -21,3 +21,11 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+truckdar:
+  kafka:
+    topic:
+      load-events: ${TRUCKDAR_LOAD_EVENTS_TOPIC:truckdar.events.load-allocation}
+  outbox:
+    publish-interval-ms: ${TRUCKDAR_OUTBOX_PUBLISH_INTERVAL_MS:1000}
+    batch-size: ${TRUCKDAR_OUTBOX_BATCH_SIZE:100}

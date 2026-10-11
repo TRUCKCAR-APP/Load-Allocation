@@ -73,6 +73,10 @@ public class FreightLoad {
     @Column(nullable = false)
     private LoadStatus status = LoadStatus.AVAILABLE;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "assignment_status")
+    private AssignmentStatus assignmentStatus;
+
     @Column(name = "assigned_driver_id")
     private String assignedDriverId;
 
@@ -87,4 +91,7 @@ public class FreightLoad {
 
     @Column(name = "assigned_at")
     private LocalDateTime assignedAt;
+
+    @Column(name = "assignment_status_changed_at")
+    private LocalDateTime assignmentStatusChangedAt;
 }

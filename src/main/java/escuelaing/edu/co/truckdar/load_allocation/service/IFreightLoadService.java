@@ -10,6 +10,10 @@ import java.util.List;
 public interface IFreightLoadService {
     FreightLoadResponse publishLoad(CreateFreightLoadRequest request);
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
+    FreightLoadResponse notifyAssignment(Long loadId);
+    FreightLoadResponse acceptAssignment(Long loadId);
+    FreightLoadResponse rejectAssignment(Long loadId);
+    FreightLoadResponse timeoutAssignment(Long loadId);
     FreightLoadResponse getLoadById(Long loadId);
     List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType);
     List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId);
