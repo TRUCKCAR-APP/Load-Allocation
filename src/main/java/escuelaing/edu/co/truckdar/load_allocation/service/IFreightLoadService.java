@@ -7,9 +7,10 @@ import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 public interface IFreightLoadService {
-    FreightLoadResponse publishLoad(CreateFreightLoadRequest request);
+    FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId);
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
     FreightLoadResponse notifyAssignment(Long loadId);
     boolean applyAssignmentNotified(Long loadId, String notifiedDriverId);

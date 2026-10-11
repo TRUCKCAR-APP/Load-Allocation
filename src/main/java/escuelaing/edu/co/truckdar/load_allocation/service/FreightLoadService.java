@@ -20,6 +20,7 @@ import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -38,8 +39,9 @@ public class FreightLoadService implements IFreightLoadService {
 
     @Override
     @Transactional
-    public FreightLoadResponse publishLoad(CreateFreightLoadRequest request) {
+    public FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId) {
         FreightLoad load = FreightLoad.builder()
+                .correlationId(correlationId != null ? correlationId : UUID.randomUUID())
                 .generatorCompanyId(request.getGeneratorCompanyId())
                 .generatorCompanyName(request.getGeneratorCompanyName())
                 .cargoDescription(request.getCargoDescription())
@@ -318,6 +320,7 @@ public class FreightLoadService implements IFreightLoadService {
                 .publishedAt(entity.getPublishedAt())
                 .assignedAt(entity.getAssignedAt())
                 .assignmentStatusChangedAt(entity.getAssignmentStatusChangedAt())
+                .correlationId(entity.getCorrelationId())
                 .build();
     }
 }

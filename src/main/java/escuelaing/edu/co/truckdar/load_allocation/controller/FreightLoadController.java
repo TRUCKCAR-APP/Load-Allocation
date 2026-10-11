@@ -3,6 +3,7 @@ package escuelaing.edu.co.truckdar.load_allocation.controller;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
+import escuelaing.edu.co.truckdar.load_allocation.model.CorrelationIds;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 import escuelaing.edu.co.truckdar.load_allocation.service.IFreightLoadService;
 import jakarta.validation.Valid;
@@ -12,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/loads")
@@ -22,8 +24,13 @@ public class FreightLoadController {
     private final IFreightLoadService service;
 
     @PostMapping
-    public ResponseEntity<FreightLoadResponse> publishLoad(@Valid @RequestBody CreateFreightLoadRequest request) {
-        return new ResponseEntity<>(service.publishLoad(request), HttpStatus.CREATED);
+    public ResponseEntity<FreightLoadResponse> publishLoad(
+            @Valid @RequestBody CreateFreightLoadRequest request,
+            @RequestHeader(value = CorrelationIds.HEADER, required = false) String correlationHeader) {
+        UUID correlationId = CorrelationIds.fromHeader(correlationHeader);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .header(CorrelationIds.HEADER, correlationId.toString())
+                .body(service.publishLoad(request, correlationId));
     }
 
     @PatchMapping("/{loadId}/assign")

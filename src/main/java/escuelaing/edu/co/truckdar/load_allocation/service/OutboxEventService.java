@@ -48,7 +48,7 @@ public class OutboxEventService {
                 .eventId(UUID.randomUUID())
                 .eventType(eventType)
                 .occurredAt(Instant.now())
-                .correlationId(UUID.randomUUID())
+                .correlationId(correlationIdOf(load))
                 .version(1)
                 .producer("load-allocation")
                 .payload(payload)
@@ -68,5 +68,16 @@ public class OutboxEventService {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("No se pudo serializar el evento para Outbox", exception);
         }
+    }
+
+    /**
+     * Todos los eventos de una carga comparten su correlationId. Las cargas creadas antes de este campo
+     * reciben uno nuevo la primera vez que emiten un evento, y se persiste con la misma transacción.
+     */
+    private UUID correlationIdOf(FreightLoad load) {
+        if (load.getCorrelationId() == null) {
+            load.setCorrelationId(UUID.randomUUID());
+        }
+        return load.getCorrelationId();
     }
 }

@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -96,6 +97,10 @@ public class FreightLoad {
 
     @Column(name = "assignment_status_changed_at")
     private LocalDateTime assignmentStatusChangedAt;
+
+    /** Correlación distribuida de la carga: se fija al publicarla y viaja en todos sus eventos. */
+    @Column(name = "correlation_id")
+    private UUID correlationId;
 
     /** Propuestas de conductor realizadas para esta carga (inicial + reasignaciones). */
     @Builder.Default
