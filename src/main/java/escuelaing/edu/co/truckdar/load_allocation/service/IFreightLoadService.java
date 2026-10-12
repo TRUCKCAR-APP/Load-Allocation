@@ -1,7 +1,9 @@
 package escuelaing.edu.co.truckdar.load_allocation.service;
 
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmationRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 
@@ -20,6 +22,10 @@ public interface IFreightLoadService {
     FreightLoadResponse acceptAssignment(Long loadId, String authenticatedUserId);
     FreightLoadResponse rejectAssignment(Long loadId, String authenticatedUserId);
     FreightLoadResponse timeoutAssignment(Long loadId);
+    FreightLoadResponse startTrip(Long loadId, String authenticatedUserId);
+    FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod);
+    FreightLoadResponse cancelLoad(Long loadId, String authenticatedUserId, String authenticatedRole, CancelLoadRequest request);
+    List<FreightLoadResponse> getLoadsForDriver(String authenticatedUserId);
     FreightLoadResponse getLoadById(Long loadId);
     List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType);
     List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId);

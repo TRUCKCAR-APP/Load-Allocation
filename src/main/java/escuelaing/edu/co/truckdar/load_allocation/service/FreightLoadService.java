@@ -1,7 +1,9 @@
 package escuelaing.edu.co.truckdar.load_allocation.service;
 
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmationRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckdar.load_allocation.exception.FreightLoadNotFoundException;
@@ -109,6 +111,10 @@ public class FreightLoadService implements IFreightLoadService {
             log.warn("Recomendación ignorada: la carga #{} no existe", loadId);
             return false;
         }
+        if (!isOpenForAssignment(load)) {
+            log.info("Recomendación ignorada para carga #{} con status {}", loadId, load.getStatus());
+            return false;
+        }
         if (!REASSIGNABLE.contains(load.getAssignmentStatus())) {
             log.info("Recomendación ignorada para carga #{} en estado {}", loadId, load.getAssignmentStatus());
             return false;
@@ -131,7 +137,7 @@ public class FreightLoadService implements IFreightLoadService {
     @Transactional
     public boolean markNoDriversAvailable(Long loadId) {
         FreightLoad load = repository.findById(loadId).orElse(null);
-        if (load == null || !REASSIGNABLE.contains(load.getAssignmentStatus())) {
+        if (load == null || !isOpenForAssignment(load) || !REASSIGNABLE.contains(load.getAssignmentStatus())) {
             log.info("Aviso de falta de candidatos ignorado para carga #{}", loadId);
             return false;
         }
@@ -145,6 +151,7 @@ public class FreightLoadService implements IFreightLoadService {
     public boolean expireIfUnanswered(Long loadId, LocalDateTime notifiedBefore) {
         FreightLoad load = repository.findById(loadId).orElse(null);
         if (load == null
+                || !isOpenForAssignment(load)
                 || load.getAssignmentStatus() != AssignmentStatus.NOTIFIED
                 || load.getAssignmentStatusChangedAt() == null
                 || !load.getAssignmentStatusChangedAt().isBefore(notifiedBefore)) {
@@ -213,8 +220,9 @@ public class FreightLoadService implements IFreightLoadService {
                     loadId, notifiedDriverId, load.getAssignedDriverId());
             return false;
         }
-        if (load.getAssignmentStatus() != AssignmentStatus.PROPOSED) {
-            log.info("assignment.notified ignorado para carga #{} en estado {}", loadId, load.getAssignmentStatus());
+        if (!isOpenForAssignment(load) || load.getAssignmentStatus() != AssignmentStatus.PROPOSED) {
+            log.info("assignment.notified ignorado para carga #{} en estado {}/{}", loadId, load.getStatus(),
+                    load.getAssignmentStatus());
             return false;
         }
         transitionAssignment(loadId, AssignmentStatus.NOTIFIED, AssignmentStatus.PROPOSED, "assignment.notified");
@@ -266,6 +274,7 @@ public class FreightLoadService implements IFreightLoadService {
     public FreightLoadResponse timeoutAssignment(Long loadId) {
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        requireOpenForAssignment(load);
         if (load.getAssignmentStatus() != AssignmentStatus.PROPOSED
                 && load.getAssignmentStatus() != AssignmentStatus.NOTIFIED) {
             throw new InvalidLoadOperationException("La propuesta de la carga #" + loadId
@@ -290,12 +299,118 @@ public class FreightLoadService implements IFreightLoadService {
     private FreightLoad transition(Long loadId, AssignmentStatus target, AssignmentStatus expected) {
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        requireOpenForAssignment(load);
         if (load.getAssignmentStatus() != expected) {
             throw new InvalidLoadOperationException("Transición inválida para la carga #" + loadId
                     + ": se esperaba " + expected + " pero el estado actual es " + load.getAssignmentStatus());
         }
         load.setAssignmentStatus(target);
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        return load;
+    }
+
+    /** El ciclo comercial (proponer, notificar, aceptar, vencer) solo aplica mientras la carga está AVAILABLE. */
+    private boolean isOpenForAssignment(FreightLoad load) {
+        return load.getStatus() == LoadStatus.AVAILABLE;
+    }
+
+    private void requireOpenForAssignment(FreightLoad load) {
+        if (!isOpenForAssignment(load)) {
+            throw new InvalidLoadOperationException("La carga #" + load.getId()
+                    + " ya no admite cambios de asignación (status=" + load.getStatus() + ")");
+        }
+    }
+
+    // ------------------------------------------------------------------ ciclo de vida del viaje
+
+    private static final Set<String> CANCELLER_ROLES = Set.of("COORDINADOR", "ADMIN");
+    private static final Set<LoadStatus> CANCELLABLE = EnumSet.of(LoadStatus.AVAILABLE, LoadStatus.ASSIGNED);
+
+    /** ASSIGNED -> IN_TRANSIT: el conductor asignado inicia el viaje. */
+    @Override
+    @Transactional
+    public FreightLoadResponse startTrip(Long loadId, String authenticatedUserId) {
+        requireAssignedDriver(loadId, authenticatedUserId, "iniciar el viaje de");
+        FreightLoad load = requireStatus(loadId, LoadStatus.ASSIGNED, "iniciar el viaje");
+        load.setStatus(LoadStatus.IN_TRANSIT);
+        load.setTripStartedAt(LocalDateTime.now());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "trip.started");
+        log.info("Viaje de la carga #{} iniciado por el conductor {}", loadId, authenticatedUserId);
+        return mapToResponse(updated);
+    }
+
+    /** IN_TRANSIT -> DELIVERED: el conductor asignado registra la entrega con su prueba (POD). */
+    @Override
+    @Transactional
+    public FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod) {
+        requireAssignedDriver(loadId, authenticatedUserId, "entregar");
+        FreightLoad load = requireStatus(loadId, LoadStatus.IN_TRANSIT, "registrar la entrega");
+        load.setStatus(LoadStatus.DELIVERED);
+        load.setDeliveredAt(LocalDateTime.now());
+        load.setPodReceiverName(pod.getReceiverName().trim());
+        load.setPodReceiverDocument(pod.getReceiverDocument());
+        load.setPodNotes(pod.getNotes());
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "trip.delivered");
+        log.info("Carga #{} entregada a {}", loadId, updated.getPodReceiverName());
+        return mapToResponse(updated);
+    }
+
+    /** AVAILABLE | ASSIGNED -> CANCELLED: solo torre de control (COORDINADOR) o ADMIN, antes de iniciar el viaje. */
+    @Override
+    @Transactional
+    public FreightLoadResponse cancelLoad(Long loadId, String authenticatedUserId, String authenticatedRole,
+                                          CancelLoadRequest request) {
+        if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
+            throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para cancelar la carga #"
+                    + loadId, true);
+        }
+        if (authenticatedRole == null || !CANCELLER_ROLES.contains(authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("Solo un COORDINADOR o ADMIN puede cancelar la carga #" + loadId
+                    + " (rol actual: " + authenticatedRole + ")", false);
+        }
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (!CANCELLABLE.contains(load.getStatus())) {
+            throw new InvalidLoadOperationException("La carga #" + loadId + " no puede cancelarse en status "
+                    + load.getStatus() + "; solo antes de iniciar el viaje");
+        }
+        load.setStatus(LoadStatus.CANCELLED);
+        load.setCancelledAt(LocalDateTime.now());
+        load.setCancellationReason(request.getReason().trim());
+        load.setCancelledBy(authenticatedUserId);
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "load.cancelled");
+        log.info("Carga #{} cancelada por {} ({}): {}", loadId, authenticatedUserId, authenticatedRole,
+                updated.getCancellationReason());
+        return mapToResponse(updated);
+    }
+
+    /** Cargas del conductor autenticado: propuestas vigentes, aceptadas y en tránsito. */
+    @Override
+    @Transactional(readOnly = true)
+    public List<FreightLoadResponse> getLoadsForDriver(String authenticatedUserId) {
+        if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
+            throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para consultar sus cargas", true);
+        }
+        return repository.findByAssignedDriverIdOrderByAssignedAtDesc(authenticatedUserId).stream()
+                .filter(load -> load.getStatus() == LoadStatus.ASSIGNED
+                        || load.getStatus() == LoadStatus.IN_TRANSIT
+                        || (load.getStatus() == LoadStatus.AVAILABLE
+                            && (load.getAssignmentStatus() == AssignmentStatus.PROPOSED
+                                || load.getAssignmentStatus() == AssignmentStatus.NOTIFIED)))
+                .map(this::mapToResponse)
+                .collect(Collectors.toList());
+    }
+
+    private FreightLoad requireStatus(Long loadId, LoadStatus expected, String action) {
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (load.getStatus() != expected) {
+            throw new InvalidLoadOperationException("No se puede " + action + " de la carga #" + loadId
+                    + ": se esperaba status " + expected + " pero es " + load.getStatus());
+        }
         return load;
     }
 
@@ -355,6 +470,14 @@ public class FreightLoadService implements IFreightLoadService {
                 .correlationId(entity.getCorrelationId())
                 .assignmentAttempts(entity.getAssignmentAttempts())
                 .discardedDriverIds(entity.getDiscardedDriverIds() == null ? List.of() : List.copyOf(entity.getDiscardedDriverIds()))
+                .tripStartedAt(entity.getTripStartedAt())
+                .deliveredAt(entity.getDeliveredAt())
+                .podReceiverName(entity.getPodReceiverName())
+                .podReceiverDocument(entity.getPodReceiverDocument())
+                .podNotes(entity.getPodNotes())
+                .cancelledAt(entity.getCancelledAt())
+                .cancellationReason(entity.getCancellationReason())
+                .cancelledBy(entity.getCancelledBy())
                 .build();
     }
 }

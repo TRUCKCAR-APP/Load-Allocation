@@ -45,4 +45,12 @@ public class FreightLoadResponse {
     private UUID correlationId;
     private Integer assignmentAttempts;
     private List<String> discardedDriverIds;
+    private LocalDateTime tripStartedAt;
+    private LocalDateTime deliveredAt;
+    private String podReceiverName;
+    private String podReceiverDocument;
+    private String podNotes;
+    private LocalDateTime cancelledAt;
+    private String cancellationReason;
+    private String cancelledBy;
 }

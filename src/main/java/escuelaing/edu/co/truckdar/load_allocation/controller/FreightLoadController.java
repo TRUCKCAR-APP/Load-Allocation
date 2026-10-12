@@ -1,7 +1,9 @@
 package escuelaing.edu.co.truckdar.load_allocation.controller;
 
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmationRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.model.CorrelationIds;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
@@ -22,6 +24,7 @@ import java.util.UUID;
 public class FreightLoadController {
 
     private static final String AUTH_USER_HEADER = "X-Auth-User";
+    private static final String AUTH_ROLE_HEADER = "X-Auth-Role";
 
     private final IFreightLoadService service;
 
@@ -60,6 +63,40 @@ public class FreightLoadController {
             @PathVariable Long loadId,
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
         return ResponseEntity.ok(service.rejectAssignment(loadId, authenticatedUserId));
+    }
+
+    /** ASSIGNED -> IN_TRANSIT. Solo el conductor asignado. */
+    @PatchMapping("/{loadId}/trip/start")
+    public ResponseEntity<FreightLoadResponse> startTrip(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.startTrip(loadId, authenticatedUserId));
+    }
+
+    /** IN_TRANSIT -> DELIVERED con prueba de entrega (POD). Solo el conductor asignado. */
+    @PatchMapping("/{loadId}/trip/deliver")
+    public ResponseEntity<FreightLoadResponse> deliverLoad(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @Valid @RequestBody DeliveryConfirmationRequest request) {
+        return ResponseEntity.ok(service.deliverLoad(loadId, authenticatedUserId, request));
+    }
+
+    /** AVAILABLE | ASSIGNED -> CANCELLED. Solo COORDINADOR o ADMIN (rol propagado por el gateway en X-Auth-Role). */
+    @PatchMapping("/{loadId}/cancel")
+    public ResponseEntity<FreightLoadResponse> cancelLoad(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole,
+            @Valid @RequestBody CancelLoadRequest request) {
+        return ResponseEntity.ok(service.cancelLoad(loadId, authenticatedUserId, authenticatedRole, request));
+    }
+
+    /** Cargas del conductor autenticado: propuestas vigentes, aceptadas y en tránsito. */
+    @GetMapping("/mine")
+    public ResponseEntity<List<FreightLoadResponse>> getMyLoads(
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.getLoadsForDriver(authenticatedUserId));
     }
 
     @PatchMapping("/{loadId}/assignment/timeout")

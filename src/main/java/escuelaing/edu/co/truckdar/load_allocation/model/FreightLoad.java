@@ -98,6 +98,31 @@ public class FreightLoad {
     @Column(name = "assignment_status_changed_at")
     private LocalDateTime assignmentStatusChangedAt;
 
+    // ---- Ciclo de vida del viaje (IN_TRANSIT, DELIVERED con prueba de entrega, CANCELLED)
+    @Column(name = "trip_started_at")
+    private LocalDateTime tripStartedAt;
+
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
+    @Column(name = "pod_receiver_name", length = 150)
+    private String podReceiverName;
+
+    @Column(name = "pod_receiver_document", length = 40)
+    private String podReceiverDocument;
+
+    @Column(name = "pod_notes", length = 500)
+    private String podNotes;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    @Column(name = "cancellation_reason", length = 500)
+    private String cancellationReason;
+
+    @Column(name = "cancelled_by")
+    private String cancelledBy;
+
     /** Correlación distribuida de la carga: se fija al publicarla y viaja en todos sus eventos. */
     @Column(name = "correlation_id")
     private UUID correlationId;

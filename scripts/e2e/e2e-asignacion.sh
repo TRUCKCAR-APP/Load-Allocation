@@ -11,12 +11,17 @@
 #   6. Verifica que la carga sea visible para el frontend del conductor.
 #   7. (Opcional, ACCEPT=1) verifica que otro usuario no pueda aceptarla (403), la acepta como el
 #      conductor asignado y planea la ruta con Route-AI.
+#   8. (ACCEPT=1) inicia el viaje (IN_TRANSIT) y registra la entrega con prueba (DELIVERED).
+#   9. (ACCEPT=1) publica otra carga y verifica la cancelación: 403 para CONDUCTOR, 200 para COORDINADOR.
 #
 # Uso (desde la raíz del repo Load-Allocation):
 #        PASSWORD=... bash scripts/e2e/e2e-asignacion.sh            # deja la carga en NOTIFIED para aceptarla en el frontend
 #        PASSWORD=... ACCEPT=1 bash scripts/e2e/e2e-asignacion.sh   # además acepta y planea la ruta
 #
 # Requiere: infraestructura (docker compose up -d) y los microservicios + api-gateway corriendo.
+#   User-Identity, api-gateway y Notifications deben arrancar con el MISMO TRUCKDAR_JWT_SECRET
+#   (Base64, >= 256 bits; JWT_SECRET se acepta como nombre heredado). El script no necesita el
+#   secreto (obtiene los tokens con login); si los servicios no lo comparten, verá 401 desde la sección 2.
 # =============================================================================
 set -uo pipefail
 
@@ -223,6 +228,42 @@ if [ "$ACCEPT" = "1" ]; then
       \"destinationCity\":\"Cali\",\"originLatitude\":4.61,\"originLongitude\":-74.082,
       \"destinationLatitude\":3.4516,\"destinationLongitude\":-76.532}"
     expect_code 200 "POST /routes/plan" && info "corredor=$(field recommendedCorridor) distancia=$(field totalDistanceKm) km riesgo=$(field riskLevel)"
+
+    section "8. Ciclo del viaje: tránsito y entrega con prueba de entrega"
+    call GET "/loads/mine" "$DRIVER_TOKEN"
+    expect_code 200 "GET /loads/mine del conductor"
+    printf '%s' "$BODY" | grep -q "\"id\":$LOAD_ID," && pass "  la carga $LOAD_ID aparece en sus cargas" || fail "  la carga $LOAD_ID no aparece en /loads/mine"
+    call PATCH "/loads/$LOAD_ID/trip/start" "$COORD_TOKEN"
+    expect_code 403 "otro usuario no puede iniciar el viaje"
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" '{"receiverName":"Jefe de Bodega"}'
+    expect_code 409 "no se puede entregar antes de iniciar el viaje"
+    call PATCH "/loads/$LOAD_ID/trip/start" "$DRIVER_TOKEN"
+    expect_code 200 "PATCH /loads/$LOAD_ID/trip/start"
+    expect_eq "$(field status)" "IN_TRANSIT" "  status"
+    call PATCH "/loads/$LOAD_ID/cancel" "$COORD_TOKEN" '{"reason":"Prueba de cancelacion en transito"}'
+    expect_code 409 "una carga en tránsito no se puede cancelar"
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" '{"receiverName":"","notes":"x"}'
+    expect_code 400 "la entrega exige el nombre de quien recibe"
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
+        '{"receiverName":"Jefe de Bodega Cali","receiverDocument":"CC 1020304050","notes":"Sin novedades"}'
+    expect_code 200 "PATCH /loads/$LOAD_ID/trip/deliver"
+    expect_eq "$(field status)" "DELIVERED" "  status"
+    expect_eq "$(field podReceiverName)" "Jefe de Bodega Cali" "  prueba de entrega: quien recibe"
+
+    section "9. Cancelación por la torre de control"
+    call POST "/loads" "$COORD_TOKEN" "{\"generatorCompanyId\":\"empresa-e2e-script\",\"generatorCompanyName\":\"Acerias E2E\",
+      \"cargoDescription\":\"Carga a cancelar (E2E $RUN_ID)\",\"weightTons\":10,\"requiredTruckType\":\"TRACTOMULA_3S3\",
+      \"originCity\":\"Bogota\",\"originDepartment\":\"Cundinamarca\",\"originLatitude\":4.61,\"originLongitude\":-74.082,
+      \"destinationCity\":\"Tunja\",\"destinationDepartment\":\"Boyaca\",\"destinationLatitude\":5.535,\"destinationLongitude\":-73.367,
+      \"offeredBudget\":1200000}"
+    expect_code 201 "carga a cancelar publicada" && CANCEL_ID="$(field id)"
+    call PATCH "/loads/$CANCEL_ID/cancel" "$DRIVER_TOKEN" '{"reason":"Intento del conductor"}'
+    expect_code 403 "un CONDUCTOR no puede cancelar cargas"
+    call PATCH "/loads/$CANCEL_ID/cancel" "$COORD_TOKEN" '{"reason":"El generador retiro la carga"}'
+    expect_code 200 "PATCH /loads/$CANCEL_ID/cancel (COORDINADOR)"
+    expect_eq "$(field status)" "CANCELLED" "  status"
+    call PATCH "/loads/$CANCEL_ID/assignment/accept" "$DRIVER_TOKEN"
+    expect_code "403 409" "la carga cancelada ya no admite aceptación"
 fi
 
 # ----------------------------------------------------------------- resumen
