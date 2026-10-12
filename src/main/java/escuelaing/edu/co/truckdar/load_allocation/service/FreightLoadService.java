@@ -348,7 +348,11 @@ public class FreightLoadService implements IFreightLoadService {
 
     // ------------------------------------------------------------------ ciclo de vida del viaje
 
-    private static final Set<String> CANCELLER_ROLES = Set.of("COORDINADOR", "ADMIN");
+    /** Torre de control (operador logístico): ve y gestiona la operación completa. */
+    private static final Set<String> CONTROL_TOWER_ROLES = Set.of("COORDINADOR", "ADMIN");
+    /** Empresa generadora de carga: publica cargas y solo ve y gestiona las suyas. */
+    private static final String GENERADOR = "GENERADOR";
+    private static final Set<String> PUBLISHER_ROLES = Set.of(GENERADOR, "COORDINADOR", "ADMIN");
     private static final Set<LoadStatus> CANCELLABLE = EnumSet.of(LoadStatus.AVAILABLE, LoadStatus.ASSIGNED);
 
     /** ASSIGNED -> IN_TRANSIT: el conductor asignado inicia el viaje. */
@@ -394,7 +398,10 @@ public class FreightLoadService implements IFreightLoadService {
         return mapToResponse(updated);
     }
 
-    /** AVAILABLE | ASSIGNED -> CANCELLED: solo torre de control (COORDINADOR) o ADMIN, antes de iniciar el viaje. */
+    /**
+     * AVAILABLE | ASSIGNED -> CANCELLED antes de iniciar el viaje: torre de control (COORDINADOR o ADMIN) o el
+     * GENERADOR dueño de la carga.
+     */
     @Override
     @Transactional
     public FreightLoadResponse cancelLoad(Long loadId, String authenticatedUserId, String authenticatedRole,
@@ -403,12 +410,12 @@ public class FreightLoadService implements IFreightLoadService {
             throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para cancelar la carga #"
                     + loadId, true);
         }
-        if (authenticatedRole == null || !CANCELLER_ROLES.contains(authenticatedRole)) {
-            throw new AssignmentAccessDeniedException("Solo un COORDINADOR o ADMIN puede cancelar la carga #" + loadId
-                    + " (rol actual: " + authenticatedRole + ")", false);
-        }
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (!isControlTower(authenticatedRole) && !isOwningGenerator(load, authenticatedUserId, authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("Solo la torre de control o el generador dueño pueden cancelar la carga #"
+                    + loadId + " (rol actual: " + authenticatedRole + ")", false);
+        }
         if (!CANCELLABLE.contains(load.getStatus())) {
             throw new InvalidLoadOperationException("La carga #" + loadId + " no puede cancelarse en status "
                     + load.getStatus() + "; solo antes de iniciar el viaje");
@@ -453,10 +460,10 @@ public class FreightLoadService implements IFreightLoadService {
         }
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
-        boolean controlTower = authenticatedRole != null && CANCELLER_ROLES.contains(authenticatedRole);
-        if (!controlTower && !authenticatedUserId.equals(load.getAssignedDriverId())) {
+        if (!isControlTower(authenticatedRole) && !authenticatedUserId.equals(load.getAssignedDriverId())
+                && !isOwningGenerator(load, authenticatedUserId, authenticatedRole)) {
             throw new AssignmentAccessDeniedException("Solo el conductor de la carga #" + loadId
-                    + " o la torre de control pueden ver su prueba de entrega", false);
+                    + ", su generador o la torre de control pueden ver su prueba de entrega", false);
         }
         if (load.getStatus() != LoadStatus.DELIVERED) {
             throw new InvalidLoadOperationException("La carga #" + loadId + " no tiene prueba de entrega (status="
@@ -486,7 +493,7 @@ public class FreightLoadService implements IFreightLoadService {
         if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
             throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para listar cargas", true);
         }
-        if (authenticatedRole == null || !CANCELLER_ROLES.contains(authenticatedRole)) {
+        if (authenticatedRole == null || !CONTROL_TOWER_ROLES.contains(authenticatedRole)) {
             throw new AssignmentAccessDeniedException("Solo un COORDINADOR o ADMIN puede listar todas las cargas", false);
         }
         List<FreightLoad> loads = statuses == null || statuses.isEmpty()
@@ -498,7 +505,8 @@ public class FreightLoadService implements IFreightLoadService {
     /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente), para excluirlos del matching. */
     @Override
     @Transactional(readOnly = true)
-    public List<DriverCommitmentResponse> getDriverCommitments() {
+    public List<DriverCommitmentResponse> getDriverCommitments(String authenticatedRole) {
+        denyGenerator(authenticatedRole, "la ocupación de los conductores");
         return repository.findDriverCommitments(DRIVER_COMMITTED, LoadStatus.AVAILABLE, PENDING_PROPOSAL).stream()
                 .map(load -> DriverCommitmentResponse.builder()
                         .driverId(load.getAssignedDriverId())
@@ -534,15 +542,20 @@ public class FreightLoadService implements IFreightLoadService {
 
     @Override
     @Transactional(readOnly = true)
-    public FreightLoadResponse getLoadById(Long loadId) {
-        return repository.findById(loadId)
-                .map(this::mapToResponse)
+    public FreightLoadResponse getLoadById(Long loadId, String authenticatedUserId, String authenticatedRole) {
+        FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        // Un generador solo consulta sus propias cargas; conductores, torre y servicios internos no cambian.
+        if (GENERADOR.equals(authenticatedRole) && !isOwningGenerator(load, authenticatedUserId, authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("La carga #" + loadId + " pertenece a otra empresa generadora", false);
+        }
+        return mapToResponse(load);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType) {
+    public List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType, String authenticatedRole) {
+        denyGenerator(authenticatedRole, "la bolsa de cargas disponibles de todas las empresas");
         List<FreightLoad> results = (truckType != null)
                 ? repository.findByStatusAndRequiredTruckType(LoadStatus.AVAILABLE, truckType)
                 : repository.findByStatusOrderByPublishedAtDesc(LoadStatus.AVAILABLE);
@@ -566,11 +579,32 @@ public class FreightLoadService implements IFreightLoadService {
     /** Envíos del generador autenticado (su id de usuario es su generatorCompanyId). */
     @Override
     @Transactional(readOnly = true)
-    public List<FreightLoadResponse> getPublishedLoads(String authenticatedUserId) {
+    public List<FreightLoadResponse> getPublishedLoads(String authenticatedUserId, String authenticatedRole) {
         if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
             throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para consultar sus envíos", true);
         }
+        if (authenticatedRole == null || !PUBLISHER_ROLES.contains(authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("Solo un GENERADOR, COORDINADOR o ADMIN tiene envíos publicados (rol actual: "
+                    + authenticatedRole + ")", false);
+        }
         return getLoadsByCompany(authenticatedUserId);
+    }
+
+    private boolean isControlTower(String authenticatedRole) {
+        return authenticatedRole != null && CONTROL_TOWER_ROLES.contains(authenticatedRole);
+    }
+
+    /** El generador es dueño de la carga si la publicó él: su id de usuario es el generatorCompanyId. */
+    private boolean isOwningGenerator(FreightLoad load, String authenticatedUserId, String authenticatedRole) {
+        return GENERADOR.equals(authenticatedRole) && authenticatedUserId != null
+                && authenticatedUserId.equals(load.getGeneratorCompanyId());
+    }
+
+    /** Consultas de toda la operación: un GENERADOR no las ve (las llamadas internas sin rol siguen permitidas). */
+    private void denyGenerator(String authenticatedRole, String resource) {
+        if (GENERADOR.equals(authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("Un GENERADOR no tiene acceso a " + resource, false);
+        }
     }
 
     /**
@@ -580,8 +614,8 @@ public class FreightLoadService implements IFreightLoadService {
     private String resolveGeneratorCompany(CreateFreightLoadRequest request, String authenticatedUserId,
                                            String authenticatedRole) {
         if (authenticatedUserId != null && !authenticatedUserId.isBlank()) {
-            if (authenticatedRole == null || !CANCELLER_ROLES.contains(authenticatedRole)) {
-                throw new AssignmentAccessDeniedException("Solo un COORDINADOR o ADMIN puede publicar cargas (rol actual: "
+            if (authenticatedRole == null || !PUBLISHER_ROLES.contains(authenticatedRole)) {
+                throw new AssignmentAccessDeniedException("Solo un GENERADOR, COORDINADOR o ADMIN puede publicar cargas (rol actual: "
                         + authenticatedRole + ")", false);
             }
             return authenticatedUserId;

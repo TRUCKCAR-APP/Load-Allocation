@@ -71,7 +71,7 @@ class FreightLoadServiceDriverCommitmentTest {
                 load(2L, LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED, "d2"),
                 load(3L, LoadStatus.AVAILABLE, AssignmentStatus.NOTIFIED, "d3"));
 
-        List<DriverCommitmentResponse> result = service().getDriverCommitments();
+        List<DriverCommitmentResponse> result = service().getDriverCommitments(null);
 
         assertThat(result).extracting(DriverCommitmentResponse::getDriverId).containsExactly("d1", "d2", "d3");
         assertThat(result).extracting(DriverCommitmentResponse::getLoadStatus)

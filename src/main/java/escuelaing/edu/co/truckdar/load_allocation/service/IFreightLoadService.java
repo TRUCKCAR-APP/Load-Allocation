@@ -31,10 +31,10 @@ public interface IFreightLoadService {
     FreightLoadResponse cancelLoad(Long loadId, String authenticatedUserId, String authenticatedRole, CancelLoadRequest request);
     List<FreightLoadResponse> getLoadsForDriver(String authenticatedUserId);
     List<FreightLoadResponse> listLoads(List<LoadStatus> statuses, String authenticatedUserId, String authenticatedRole);
-    List<DriverCommitmentResponse> getDriverCommitments();
+    List<DriverCommitmentResponse> getDriverCommitments(String authenticatedRole);
     ProofOfDeliveryResponse getProofOfDelivery(Long loadId, String authenticatedUserId, String authenticatedRole);
-    FreightLoadResponse getLoadById(Long loadId);
-    List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType);
+    FreightLoadResponse getLoadById(Long loadId, String authenticatedUserId, String authenticatedRole);
+    List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType, String authenticatedRole);
     List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId, String authenticatedUserId, String authenticatedRole);
-    List<FreightLoadResponse> getPublishedLoads(String authenticatedUserId);
+    List<FreightLoadResponse> getPublishedLoads(String authenticatedUserId, String authenticatedRole);
 }

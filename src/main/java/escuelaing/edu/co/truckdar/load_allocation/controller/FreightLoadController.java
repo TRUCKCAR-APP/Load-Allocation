@@ -7,6 +7,7 @@ import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmati
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.DriverCommitmentResponse;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.ProofOfDeliveryResponse;
+import escuelaing.edu.co.truckdar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckdar.load_allocation.model.CorrelationIds;
 import escuelaing.edu.co.truckdar.load_allocation.model.LoadStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
@@ -46,19 +47,25 @@ public class FreightLoadController {
     /** Envíos del generador autenticado: cargas cuyo generatorCompanyId es su id de usuario. */
     @GetMapping("/published")
     public ResponseEntity<List<FreightLoadResponse>> getPublishedLoads(
-            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
-        return ResponseEntity.ok(service.getPublishedLoads(authenticatedUserId));
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.getPublishedLoads(authenticatedUserId, authenticatedRole));
     }
 
     @PatchMapping("/{loadId}/assign")
     public ResponseEntity<FreightLoadResponse> assignDriver(
             @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole,
             @Valid @RequestBody AssignDriverRequest request) {
+        denyGenerator(authenticatedRole);
         return ResponseEntity.ok(service.assignDriver(loadId, request));
     }
 
     @PatchMapping("/{loadId}/assignment/notify")
-    public ResponseEntity<FreightLoadResponse> notifyAssignment(@PathVariable Long loadId) {
+    public ResponseEntity<FreightLoadResponse> notifyAssignment(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        denyGenerator(authenticatedRole);
         return ResponseEntity.ok(service.notifyAssignment(loadId));
     }
 
@@ -131,24 +138,32 @@ public class FreightLoadController {
 
     /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente); lo usa el motor de asignación. */
     @GetMapping("/driver-commitments")
-    public ResponseEntity<List<DriverCommitmentResponse>> getDriverCommitments() {
-        return ResponseEntity.ok(service.getDriverCommitments());
+    public ResponseEntity<List<DriverCommitmentResponse>> getDriverCommitments(
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.getDriverCommitments(authenticatedRole));
     }
 
     @PatchMapping("/{loadId}/assignment/timeout")
-    public ResponseEntity<FreightLoadResponse> timeoutAssignment(@PathVariable Long loadId) {
+    public ResponseEntity<FreightLoadResponse> timeoutAssignment(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        denyGenerator(authenticatedRole);
         return ResponseEntity.ok(service.timeoutAssignment(loadId));
     }
 
     @GetMapping("/{loadId}")
-    public ResponseEntity<FreightLoadResponse> getLoadById(@PathVariable Long loadId) {
-        return ResponseEntity.ok(service.getLoadById(loadId));
+    public ResponseEntity<FreightLoadResponse> getLoadById(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.getLoadById(loadId, authenticatedUserId, authenticatedRole));
     }
 
     @GetMapping("/available")
     public ResponseEntity<List<FreightLoadResponse>> getAvailableLoads(
-            @RequestParam(required = false) TruckTypeRequired truckType) {
-        return ResponseEntity.ok(service.getAvailableLoads(truckType));
+            @RequestParam(required = false) TruckTypeRequired truckType,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.getAvailableLoads(truckType, authenticatedRole));
     }
 
     @GetMapping("/company/{companyId}")
@@ -157,5 +172,15 @@ public class FreightLoadController {
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
         return ResponseEntity.ok(service.getLoadsByCompany(companyId, authenticatedUserId, authenticatedRole));
+    }
+
+    /**
+     * Operaciones del ciclo de asignación (proponer, notificar, vencer): las usan los servicios internos y la torre
+     * de control; una empresa generadora no puede invocarlas.
+     */
+    private static void denyGenerator(String authenticatedRole) {
+        if ("GENERADOR".equals(authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("Un GENERADOR no puede operar el ciclo de asignación", false);
+        }
     }
 }
