@@ -4,6 +4,7 @@ import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverReques
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmationRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.response.DriverCommitmentResponse;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckdar.load_allocation.exception.FreightLoadNotFoundException;
@@ -33,6 +34,11 @@ public class FreightLoadService implements IFreightLoadService {
 
     private static final Set<AssignmentStatus> REASSIGNABLE =
             EnumSet.of(AssignmentStatus.REJECTED, AssignmentStatus.TIMEOUT);
+    /** Un conductor con una carga en estos status está ocupado: no puede aceptar ni recibir otra. */
+    private static final Set<LoadStatus> DRIVER_COMMITTED = EnumSet.of(LoadStatus.ASSIGNED, LoadStatus.IN_TRANSIT);
+    /** Propuesta vigente: el conductor debe responderla antes de recibir otra. */
+    private static final Set<AssignmentStatus> PENDING_PROPOSAL =
+            EnumSet.of(AssignmentStatus.PROPOSED, AssignmentStatus.NOTIFIED);
 
     private final FreightLoadRepository repository;
     private final OutboxEventService outboxEventService;
@@ -87,6 +93,11 @@ public class FreightLoadService implements IFreightLoadService {
             throw new InvalidLoadOperationException("El conductor " + request.getDriverId()
                     + " ya rechazó o dejó vencer la carga #" + loadId);
         }
+        commitmentsOf(request.getDriverId(), loadId).stream().findFirst().ifPresent(other -> {
+            throw new InvalidLoadOperationException("El conductor " + request.getDriverId()
+                    + " está ocupado con la carga #" + other.getId() + " (" + describeCommitment(other)
+                    + "); no puede recibir la carga #" + loadId);
+        });
         if (reopening) {
             // Nuevo ciclo de asignación: se reinicia el límite de intentos y se conservan los conductores descartados.
             load.setAssignmentAttempts(0);
@@ -233,6 +244,14 @@ public class FreightLoadService implements IFreightLoadService {
     @Transactional
     public FreightLoadResponse acceptAssignment(Long loadId, String authenticatedUserId) {
         requireAssignedDriver(loadId, authenticatedUserId, "aceptar");
+        // Una propuesta pendiente en otra carga no bloquea; una carga aceptada o en ruta sí.
+        repository.findByAssignedDriverIdAndStatusIn(authenticatedUserId, DRIVER_COMMITTED).stream()
+                .filter(other -> !other.getId().equals(loadId))
+                .findFirst()
+                .ifPresent(other -> {
+                    throw new InvalidLoadOperationException("Ya tiene la carga #" + other.getId() + " en status "
+                            + other.getStatus() + "; termínela antes de aceptar la carga #" + loadId);
+                });
         FreightLoad load = transition(loadId, AssignmentStatus.ACCEPTED, AssignmentStatus.NOTIFIED);
         load.setStatus(LoadStatus.ASSIGNED);
         load.setAssignedAt(LocalDateTime.now());
@@ -402,6 +421,33 @@ public class FreightLoadService implements IFreightLoadService {
                                 || load.getAssignmentStatus() == AssignmentStatus.NOTIFIED)))
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
+    }
+
+    /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente), para excluirlos del matching. */
+    @Override
+    @Transactional(readOnly = true)
+    public List<DriverCommitmentResponse> getDriverCommitments() {
+        return repository.findDriverCommitments(DRIVER_COMMITTED, LoadStatus.AVAILABLE, PENDING_PROPOSAL).stream()
+                .map(load -> DriverCommitmentResponse.builder()
+                        .driverId(load.getAssignedDriverId())
+                        .loadId(load.getId())
+                        .loadStatus(load.getStatus())
+                        .assignmentStatus(load.getAssignmentStatus())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
+    /** Compromisos del conductor en cargas distintas de {@code exceptLoadId}. */
+    private List<FreightLoad> commitmentsOf(String driverId, Long exceptLoadId) {
+        return repository.findDriverCommitments(DRIVER_COMMITTED, LoadStatus.AVAILABLE, PENDING_PROPOSAL).stream()
+                .filter(load -> driverId.equals(load.getAssignedDriverId()) && !load.getId().equals(exceptLoadId))
+                .collect(Collectors.toList());
+    }
+
+    private String describeCommitment(FreightLoad load) {
+        return load.getStatus() == LoadStatus.AVAILABLE
+                ? "propuesta " + load.getAssignmentStatus()
+                : load.getStatus().name();
     }
 
     private FreightLoad requireStatus(Long loadId, LoadStatus expected, String action) {

@@ -4,6 +4,7 @@ import escuelaing.edu.co.truckdar.load_allocation.dto.request.AssignDriverReques
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmationRequest;
+import escuelaing.edu.co.truckdar.load_allocation.dto.response.DriverCommitmentResponse;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckdar.load_allocation.model.CorrelationIds;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
@@ -97,6 +98,12 @@ public class FreightLoadController {
     public ResponseEntity<List<FreightLoadResponse>> getMyLoads(
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
         return ResponseEntity.ok(service.getLoadsForDriver(authenticatedUserId));
+    }
+
+    /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente); lo usa el motor de asignación. */
+    @GetMapping("/driver-commitments")
+    public ResponseEntity<List<DriverCommitmentResponse>> getDriverCommitments() {
+        return ResponseEntity.ok(service.getDriverCommitments());
     }
 
     @PatchMapping("/{loadId}/assignment/timeout")
