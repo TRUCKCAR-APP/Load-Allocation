@@ -114,6 +114,13 @@ public class FreightLoad {
     @Column(name = "pod_notes", length = 500)
     private String podNotes;
 
+    /** La firma y la foto están en freight_load_pod_media; aquí solo se indica si existen. */
+    @Column(name = "pod_has_signature")
+    private Boolean podHasSignature;
+
+    @Column(name = "pod_has_photo")
+    private Boolean podHasPhoto;
+
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
 

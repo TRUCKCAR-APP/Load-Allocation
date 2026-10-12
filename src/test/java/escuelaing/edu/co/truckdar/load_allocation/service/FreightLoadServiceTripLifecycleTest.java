@@ -8,7 +8,9 @@ import escuelaing.edu.co.truckdar.load_allocation.exception.InvalidLoadOperation
 import escuelaing.edu.co.truckdar.load_allocation.model.AssignmentStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.FreightLoad;
 import escuelaing.edu.co.truckdar.load_allocation.model.LoadStatus;
+import escuelaing.edu.co.truckdar.load_allocation.model.ProofOfDeliveryMedia;
 import escuelaing.edu.co.truckdar.load_allocation.repository.FreightLoadRepository;
+import escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -39,10 +41,13 @@ class FreightLoadServiceTripLifecycleTest {
     @Mock
     private OutboxEventService outboxEventService;
 
+    @Mock
+    private ProofOfDeliveryMediaRepository podMediaRepository;
+
     private FreightLoadService serviceWith(FreightLoad load) {
         when(repository.findById(load.getId())).thenReturn(Optional.of(load));
         when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        return new FreightLoadService(repository, outboxEventService);
+        return new FreightLoadService(repository, outboxEventService, podMediaRepository);
     }
 
     private FreightLoad load(LoadStatus status, AssignmentStatus assignment) {
@@ -171,10 +176,82 @@ class FreightLoadServiceTripLifecycleTest {
                 .assignmentStatus(AssignmentStatus.REJECTED).assignedDriverId(DRIVER).build();
         when(repository.findByAssignedDriverIdOrderByAssignedAtDesc(DRIVER))
                 .thenReturn(List.of(pending, inTransit, delivered, rejected));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService, podMediaRepository);
 
         assertThat(service.getLoadsForDriver(DRIVER)).extracting(FreightLoadResponse::getId).containsExactly(1L, 2L);
         assertThatThrownBy(() -> service.getLoadsForDriver(" "))
+                .isInstanceOf(AssignmentAccessDeniedException.class);
+    }
+
+    private static final String SIGNATURE = "data:image/png;base64,iVBORw0KGgo=";
+    private static final String PHOTO = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+
+    @Test
+    void deliveryStoresSignatureAndPhotoOutsideTheLoad() {
+        FreightLoad load = load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED);
+        FreightLoadService service = serviceWith(load);
+        DeliveryConfirmationRequest pod = pod();
+        pod.setSignatureDataUrl(SIGNATURE);
+        pod.setPhotoUrl(PHOTO);
+
+        FreightLoadResponse delivered = service.deliverLoad(30L, DRIVER, pod);
+
+        assertThat(delivered.isPodHasSignature()).isTrue();
+        assertThat(delivered.isPodHasPhoto()).isTrue();
+        org.mockito.ArgumentCaptor<ProofOfDeliveryMedia> media = org.mockito.ArgumentCaptor.forClass(ProofOfDeliveryMedia.class);
+        verify(podMediaRepository).save(media.capture());
+        assertThat(media.getValue().getLoadId()).isEqualTo(30L);
+        assertThat(media.getValue().getSignatureDataUrl()).isEqualTo(SIGNATURE);
+        assertThat(media.getValue().getPhotoUrl()).isEqualTo(PHOTO);
+    }
+
+    @Test
+    void deliveryWithoutMediaDoesNotWriteTheMediaTable() {
+        FreightLoad load = load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED);
+
+        FreightLoadResponse delivered = serviceWith(load).deliverLoad(30L, DRIVER, pod());
+
+        assertThat(delivered.isPodHasSignature()).isFalse();
+        verify(podMediaRepository, never()).save(any());
+    }
+
+    @Test
+    void proofOfDeliveryIsVisibleToItsDriverAndTheControlTowerOnly() {
+        FreightLoad load = load(LoadStatus.DELIVERED, AssignmentStatus.ACCEPTED);
+        load.setPodReceiverName("Jefe de Bodega");
+        load.setPodHasSignature(true);
+        when(podMediaRepository.findById(30L)).thenReturn(Optional.of(ProofOfDeliveryMedia.builder()
+                .loadId(30L).signatureDataUrl(SIGNATURE).photoUrl(PHOTO).build()));
+        FreightLoadService service = serviceWith(load);
+
+        assertThat(service.getProofOfDelivery(30L, DRIVER, "CONDUCTOR").getSignatureDataUrl()).isEqualTo(SIGNATURE);
+        assertThat(service.getProofOfDelivery(30L, "coord-1", "COORDINADOR").getPhotoUrl()).isEqualTo(PHOTO);
+        assertThat(service.getProofOfDelivery(30L, "coord-1", "COORDINADOR").getReceiverName()).isEqualTo("Jefe de Bodega");
+        assertThatThrownBy(() -> service.getProofOfDelivery(30L, "otro-conductor", "CONDUCTOR"))
+                .isInstanceOf(AssignmentAccessDeniedException.class);
+        assertThatThrownBy(() -> service.getProofOfDelivery(30L, null, null))
+                .isInstanceOf(AssignmentAccessDeniedException.class);
+    }
+
+    @Test
+    void proofOfDeliveryRequiresADeliveredLoad() {
+        FreightLoadService service = serviceWith(load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED));
+
+        assertThatThrownBy(() -> service.getProofOfDelivery(30L, DRIVER, "CONDUCTOR"))
+                .isInstanceOf(InvalidLoadOperationException.class)
+                .hasMessageContaining("IN_TRANSIT");
+    }
+
+    @Test
+    void controlTowerListsLoadsByStatusButDriversCannot() {
+        FreightLoad delivered = load(LoadStatus.DELIVERED, AssignmentStatus.ACCEPTED);
+        when(repository.findTop200ByStatusInOrderByPublishedAtDesc(List.of(LoadStatus.DELIVERED)))
+                .thenReturn(List.of(delivered));
+        FreightLoadService service = serviceWith(delivered);
+
+        assertThat(service.listLoads(List.of(LoadStatus.DELIVERED), "coord-1", "COORDINADOR"))
+                .extracting(FreightLoadResponse::getStatus).containsExactly(LoadStatus.DELIVERED);
+        assertThatThrownBy(() -> service.listLoads(null, DRIVER, "CONDUCTOR"))
                 .isInstanceOf(AssignmentAccessDeniedException.class);
     }
 }

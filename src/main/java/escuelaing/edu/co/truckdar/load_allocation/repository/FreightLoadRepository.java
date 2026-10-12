@@ -38,4 +38,8 @@ public interface FreightLoadRepository extends JpaRepository<FreightLoad, Long> 
                                             @Param("pending") Collection<AssignmentStatus> pending);
 
     List<FreightLoad> findByAssignedDriverIdAndStatusIn(String assignedDriverId, Collection<LoadStatus> statuses);
+
+    List<FreightLoad> findTop200ByStatusInOrderByPublishedAtDesc(Collection<LoadStatus> statuses);
+
+    List<FreightLoad> findTop200ByOrderByPublishedAtDesc();
 }

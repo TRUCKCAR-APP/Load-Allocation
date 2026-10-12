@@ -6,7 +6,9 @@ import escuelaing.edu.co.truckdar.load_allocation.dto.request.CreateFreightLoadR
 import escuelaing.edu.co.truckdar.load_allocation.dto.request.DeliveryConfirmationRequest;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.DriverCommitmentResponse;
 import escuelaing.edu.co.truckdar.load_allocation.dto.response.FreightLoadResponse;
+import escuelaing.edu.co.truckdar.load_allocation.dto.response.ProofOfDeliveryResponse;
 import escuelaing.edu.co.truckdar.load_allocation.model.CorrelationIds;
+import escuelaing.edu.co.truckdar.load_allocation.model.LoadStatus;
 import escuelaing.edu.co.truckdar.load_allocation.model.TruckTypeRequired;
 import escuelaing.edu.co.truckdar.load_allocation.service.IFreightLoadService;
 import jakarta.validation.Valid;
@@ -98,6 +100,24 @@ public class FreightLoadController {
     public ResponseEntity<List<FreightLoadResponse>> getMyLoads(
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
         return ResponseEntity.ok(service.getLoadsForDriver(authenticatedUserId));
+    }
+
+    /** Torre de control: cargas de todos los generadores, opcionalmente filtradas (?status=DELIVERED&status=...). */
+    @GetMapping
+    public ResponseEntity<List<FreightLoadResponse>> listLoads(
+            @RequestParam(value = "status", required = false) List<LoadStatus> statuses,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.listLoads(statuses, authenticatedUserId, authenticatedRole));
+    }
+
+    /** POD completo (firma y foto incluidas): conductor de la carga o torre de control. */
+    @GetMapping("/{loadId}/proof-of-delivery")
+    public ResponseEntity<ProofOfDeliveryResponse> getProofOfDelivery(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.getProofOfDelivery(loadId, authenticatedUserId, authenticatedRole));
     }
 
     /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente); lo usa el motor de asignación. */

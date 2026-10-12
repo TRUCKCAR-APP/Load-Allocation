@@ -40,7 +40,8 @@ class FreightLoadServiceDriverCommitmentTest {
 
     private FreightLoadService service() {
         when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        return new FreightLoadService(repository, outboxEventService);
+        return new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
     }
 
     private FreightLoad load(Long id, LoadStatus status, AssignmentStatus assignment, String driverId) {

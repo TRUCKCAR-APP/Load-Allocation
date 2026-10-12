@@ -2,6 +2,8 @@
 # =============================================================================
 # TruckDar - Prueba E2E del ciclo de asignación de carga a través del api-gateway.
 #
+#   0. Cierra los compromisos previos del conductor real: rechaza propuestas NOTIFIED, vence las PROPOSED,
+#      cancela las cargas ASSIGNED y cierra con entrega los viajes IN_TRANSIT de ejecuciones anteriores.
 #   1. Inactiva los conductores ficticios drv-e2e-1..3 en fleets-drivers.
 #   2. Activa al conductor real (usuario CONDUCTOR) con un vehículo apto.
 #   3. Publica una carga limpia de 30 t (Load-Allocation).
@@ -11,7 +13,7 @@
 #   6. Verifica que la carga sea visible para el frontend del conductor.
 #   7. (Opcional, ACCEPT=1) verifica que otro usuario no pueda aceptarla (403), la acepta como el
 #      conductor asignado y planea la ruta con Route-AI.
-#   8. (ACCEPT=1) inicia el viaje (IN_TRANSIT) y registra la entrega con prueba (DELIVERED).
+#   8. (ACCEPT=1) inicia el viaje (IN_TRANSIT), registra la entrega con firma y foto (DELIVERED) y consulta el POD.
 #   9. (ACCEPT=1) publica otra carga y verifica la cancelación: 403 para CONDUCTOR, 200 para COORDINADOR.
 #
 # Uso (desde la raíz del repo Load-Allocation):
@@ -124,6 +126,46 @@ expect_code 200 "perfil del conductor"
 expect_eq "$(field id)" "$DRIVER_ID" "id de usuario del conductor = driverId en fleets-drivers" \
     || { echo "El driverId debe ser el id de usuario del conductor. Ajuste DRIVER_ID."; exit 1; }
 DRIVER_NAME="$(field firstName) $(field lastName)"
+
+# ----------------------------------------------------------------- 1b. limpieza
+# Ejecuciones previas (o el reintento automático del matching) pueden dejar al conductor con propuestas o
+# cargas activas; mientras las tenga, el motor no le propone la carga nueva. Se cierran por rondas porque cada
+# rechazo/cancelación dispara un reintento asíncrono que puede proponerle otra carga en espera.
+section "1b. Limpieza de compromisos previos de $DRIVER_NAME"
+driver_commitments() {
+    call GET "/loads/driver-commitments" "$COORD_TOKEN" >/dev/null
+    printf '%s' "$BODY" | grep -oE '\{[^}]*\}' | grep "\"driverId\":\"$DRIVER_ID\"" || true
+}
+CLEAN=0
+for round in 1 2 3 4 5 6; do
+    PENDING="$(driver_commitments)"
+    if [ -z "$PENDING" ]; then
+        # Confirmación tras dar tiempo a un reintento en curso.
+        sleep 4
+        PENDING="$(driver_commitments)"
+        [ -z "$PENDING" ] && { CLEAN=1; break; }
+    fi
+    while IFS= read -r commitment; do
+        id="$(field loadId "$commitment")"; status="$(field loadStatus "$commitment")"
+        assignment="$(field assignmentStatus "$commitment")"
+        info "ronda $round: carga #$id ($status/$assignment)"
+        case "$status/$assignment" in
+            AVAILABLE/NOTIFIED) call PATCH "/loads/$id/assignment/reject" "$DRIVER_TOKEN" ;;
+            AVAILABLE/PROPOSED) call PATCH "/loads/$id/assignment/timeout" "$COORD_TOKEN" ;;
+            ASSIGNED/*)         call PATCH "/loads/$id/cancel" "$COORD_TOKEN" \
+                                    '{"reason":"Limpieza automatica antes de la prueba E2E"}' ;;
+            IN_TRANSIT/*)       call PATCH "/loads/$id/trip/deliver" "$DRIVER_TOKEN" \
+                                    '{"receiverName":"Cierre automatico E2E","notes":"Viaje de una prueba anterior cerrado por el script E2E"}' ;;
+        esac
+    done <<< "$PENDING"
+    sleep 3
+done
+if [ "$CLEAN" = "1" ]; then
+    pass "$DRIVER_NAME sin propuestas ni cargas activas"
+else
+    fail "$DRIVER_NAME sigue con compromisos tras 6 rondas: $(printf '%s' "$PENDING" | head -c 300)"
+    exit 1
+fi
 
 # ----------------------------------------------------------------- 2. flota
 section "2. Flota (fleets-drivers)"
@@ -244,11 +286,32 @@ if [ "$ACCEPT" = "1" ]; then
     expect_code 409 "una carga en tránsito no se puede cancelar"
     call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" '{"receiverName":"","notes":"x"}'
     expect_code 400 "la entrega exige el nombre de quien recibe"
+    # Firma SVG con script (<svg onload=alert(1)>): se rechaza.
     call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
-        '{"receiverName":"Jefe de Bodega Cali","receiverDocument":"CC 1020304050","notes":"Sin novedades"}'
+        '{"receiverName":"Jefe de Bodega Cali","signatureDataUrl":"data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIj48L3N2Zz4="}'
+    expect_code 400 "una firma SVG con scripts se rechaza"
+    # Firma PNG de 1x1 px y foto por URL: suficiente para validar el contrato del POD.
+    SIGNATURE='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+    PHOTO_URL='https://evidencias.truckdar.co/e2e/entrega.jpg'
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
+        "{\"receiverName\":\"Jefe de Bodega Cali\",\"receiverDocument\":\"CC 1020304050\",\"notes\":\"Sin novedades\",
+          \"signatureDataUrl\":\"$SIGNATURE\",\"photoUrl\":\"$PHOTO_URL\"}"
     expect_code 200 "PATCH /loads/$LOAD_ID/trip/deliver"
     expect_eq "$(field status)" "DELIVERED" "  status"
     expect_eq "$(field podReceiverName)" "Jefe de Bodega Cali" "  prueba de entrega: quien recibe"
+    expect_eq "$(field podHasSignature)" "true" "  prueba de entrega con firma"
+    call GET "/loads/$LOAD_ID/proof-of-delivery" "$COORD_TOKEN"
+    expect_code 200 "GET /loads/$LOAD_ID/proof-of-delivery (torre de control)"
+    expect_eq "$(field signatureDataUrl)" "$SIGNATURE" "  firma almacenada"
+    expect_eq "$(field photoUrl)" "$PHOTO_URL" "  foto almacenada"
+    call GET "/loads/$LOAD_ID/proof-of-delivery" "$DRIVER_TOKEN"
+    expect_code 200 "el conductor ve su prueba de entrega"
+    call GET "/loads?status=DELIVERED" "$DRIVER_TOKEN"
+    expect_code 403 "un CONDUCTOR no lista todas las cargas"
+    call GET "/loads?status=DELIVERED" "$COORD_TOKEN"
+    expect_code 200 "GET /loads?status=DELIVERED (torre de control)"
+    printf '%s' "$BODY" | grep -q "\"id\":$LOAD_ID," && pass "  la carga $LOAD_ID aparece en el historial de entregas" \
+        || fail "  la carga $LOAD_ID no aparece en el historial de entregas"
 
     section "9. Cancelación por la torre de control"
     call POST "/loads" "$COORD_TOKEN" "{\"generatorCompanyId\":\"empresa-e2e-script\",\"generatorCompanyName\":\"Acerias E2E\",

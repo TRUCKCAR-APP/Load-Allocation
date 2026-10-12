@@ -45,7 +45,8 @@ class FreightLoadServiceReassignmentLoopTest {
                 .build();
         when(repository.findById(21L)).thenReturn(Optional.of(load));
         when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        service = new FreightLoadService(repository, outboxEventService);
+        service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
     }
 
     @Test

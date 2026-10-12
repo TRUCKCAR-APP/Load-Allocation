@@ -50,6 +50,9 @@ public class FreightLoadResponse {
     private String podReceiverName;
     private String podReceiverDocument;
     private String podNotes;
+    /** La firma y la foto se consultan en GET /loads/{id}/proof-of-delivery. */
+    private boolean podHasSignature;
+    private boolean podHasPhoto;
     private LocalDateTime cancelledAt;
     private String cancellationReason;
     private String cancelledBy;

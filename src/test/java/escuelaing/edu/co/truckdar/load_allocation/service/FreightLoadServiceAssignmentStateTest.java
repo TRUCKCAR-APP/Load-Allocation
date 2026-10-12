@@ -40,7 +40,8 @@ class FreightLoadServiceAssignmentStateTest {
                 .build();
         when(repository.findById(7L)).thenReturn(Optional.of(load));
         when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
         AssignDriverRequest request = AssignDriverRequest.builder()
                 .driverId("driver-7")
                 .driverName("Driver Seven")
@@ -72,7 +73,8 @@ class FreightLoadServiceAssignmentStateTest {
                 .build();
         when(repository.findById(9L)).thenReturn(Optional.of(load));
         when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
 
         assertThat(service.applyAssignmentNotified(9L, "driver-42")).isTrue();
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.NOTIFIED);
@@ -90,7 +92,8 @@ class FreightLoadServiceAssignmentStateTest {
                 .assignedDriverId("driver-2")
                 .build();
         when(repository.findById(10L)).thenReturn(Optional.of(load));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
 
         assertThat(service.applyAssignmentNotified(10L, "driver-1")).isFalse();
         assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.PROPOSED);
@@ -106,7 +109,8 @@ class FreightLoadServiceAssignmentStateTest {
                 .assignedDriverId("driver-8")
                 .build();
         when(repository.findById(8L)).thenReturn(Optional.of(load));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
 
         assertThatThrownBy(() -> service.acceptAssignment(8L, "driver-8"))
                 .isInstanceOf(InvalidLoadOperationException.class);
@@ -122,7 +126,8 @@ class FreightLoadServiceAssignmentStateTest {
                 .assignedDriverId("driver-11")
                 .build();
         when(repository.findById(11L)).thenReturn(Optional.of(load));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
 
         assertThatThrownBy(() -> service.acceptAssignment(11L, "otro-usuario"))
                 .isInstanceOf(AssignmentAccessDeniedException.class)
@@ -147,7 +152,8 @@ class FreightLoadServiceAssignmentStateTest {
         load.getDiscardedDriverIds().add("driver-old");
         when(repository.findById(12L)).thenReturn(Optional.of(load));
         when(repository.save(any(FreightLoad.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
 
         assertThatThrownBy(() -> service.assignDriver(12L, AssignDriverRequest.builder()
                 .driverId("driver-old").driverName("Old").vehiclePlate("OLD123").build()))
@@ -172,7 +178,8 @@ class FreightLoadServiceAssignmentStateTest {
                 .assignmentStatus(AssignmentStatus.NOTIFIED)
                 .build();
         when(repository.findById(13L)).thenReturn(Optional.of(load));
-        FreightLoadService service = new FreightLoadService(repository, outboxEventService);
+        FreightLoadService service = new FreightLoadService(repository, outboxEventService,
+                org.mockito.Mockito.mock(escuelaing.edu.co.truckdar.load_allocation.repository.ProofOfDeliveryMediaRepository.class));
 
         assertThatThrownBy(() -> service.assignDriver(13L, AssignDriverRequest.builder()
                 .driverId("driver-x").driverName("X").vehiclePlate("XXX111").build()))
