@@ -17,7 +17,10 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class CreateFreightLoadRequest {
 
-    @NotBlank(message = "El ID de la empresa generadora es obligatorio")
+    /**
+     * Solo para llamadas internas sin gateway: con usuario autenticado, la empresa generadora es siempre
+     * X-Auth-User y este valor se ignora.
+     */
     private String generatorCompanyId;
 
     @NotBlank(message = "El nombre de la empresa generadora es obligatorio")

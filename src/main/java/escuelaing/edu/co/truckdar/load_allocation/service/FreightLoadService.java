@@ -53,10 +53,11 @@ public class FreightLoadService implements IFreightLoadService {
 
     @Override
     @Transactional
-    public FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId) {
+    public FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId,
+                                           String authenticatedUserId, String authenticatedRole) {
         FreightLoad load = FreightLoad.builder()
                 .correlationId(correlationId != null ? correlationId : UUID.randomUUID())
-                .generatorCompanyId(request.getGeneratorCompanyId())
+                .generatorCompanyId(resolveGeneratorCompany(request, authenticatedUserId, authenticatedRole))
                 .generatorCompanyName(request.getGeneratorCompanyName())
                 .cargoDescription(request.getCargoDescription())
                 .weightTons(request.getWeightTons())
@@ -551,7 +552,48 @@ public class FreightLoadService implements IFreightLoadService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId) {
+    public List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId, String authenticatedUserId,
+                                                       String authenticatedRole) {
+        if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
+            throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para consultar cargas de una empresa", true);
+        }
+        if (!generatorCompanyId.equals(authenticatedUserId) && !"ADMIN".equals(authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("Solo puede consultar las cargas de su propia empresa", false);
+        }
+        return getLoadsByCompany(generatorCompanyId);
+    }
+
+    /** Envíos del generador autenticado (su id de usuario es su generatorCompanyId). */
+    @Override
+    @Transactional(readOnly = true)
+    public List<FreightLoadResponse> getPublishedLoads(String authenticatedUserId) {
+        if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
+            throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para consultar sus envíos", true);
+        }
+        return getLoadsByCompany(authenticatedUserId);
+    }
+
+    /**
+     * La empresa generadora es el usuario que publica (X-Auth-User), no un valor que el cliente pueda elegir.
+     * Sin usuario (llamada interna directa, sin gateway) se acepta el generatorCompanyId del cuerpo.
+     */
+    private String resolveGeneratorCompany(CreateFreightLoadRequest request, String authenticatedUserId,
+                                           String authenticatedRole) {
+        if (authenticatedUserId != null && !authenticatedUserId.isBlank()) {
+            if (authenticatedRole == null || !CANCELLER_ROLES.contains(authenticatedRole)) {
+                throw new AssignmentAccessDeniedException("Solo un COORDINADOR o ADMIN puede publicar cargas (rol actual: "
+                        + authenticatedRole + ")", false);
+            }
+            return authenticatedUserId;
+        }
+        if (request.getGeneratorCompanyId() == null || request.getGeneratorCompanyId().isBlank()) {
+            throw new AssignmentAccessDeniedException(
+                    "Se requiere un usuario autenticado (o generatorCompanyId en llamadas internas) para publicar", true);
+        }
+        return request.getGeneratorCompanyId();
+    }
+
+    private List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId) {
         return repository.findByGeneratorCompanyIdOrderByPublishedAtDesc(generatorCompanyId)
                 .stream()
                 .map(this::mapToResponse)

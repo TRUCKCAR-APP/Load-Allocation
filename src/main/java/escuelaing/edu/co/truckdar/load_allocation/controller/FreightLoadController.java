@@ -34,11 +34,20 @@ public class FreightLoadController {
     @PostMapping
     public ResponseEntity<FreightLoadResponse> publishLoad(
             @Valid @RequestBody CreateFreightLoadRequest request,
-            @RequestHeader(value = CorrelationIds.HEADER, required = false) String correlationHeader) {
+            @RequestHeader(value = CorrelationIds.HEADER, required = false) String correlationHeader,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
         UUID correlationId = CorrelationIds.fromHeader(correlationHeader);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(CorrelationIds.HEADER, correlationId.toString())
-                .body(service.publishLoad(request, correlationId));
+                .body(service.publishLoad(request, correlationId, authenticatedUserId, authenticatedRole));
+    }
+
+    /** Envíos del generador autenticado: cargas cuyo generatorCompanyId es su id de usuario. */
+    @GetMapping("/published")
+    public ResponseEntity<List<FreightLoadResponse>> getPublishedLoads(
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.getPublishedLoads(authenticatedUserId));
     }
 
     @PatchMapping("/{loadId}/assign")
@@ -143,7 +152,10 @@ public class FreightLoadController {
     }
 
     @GetMapping("/company/{companyId}")
-    public ResponseEntity<List<FreightLoadResponse>> getLoadsByCompany(@PathVariable String companyId) {
-        return ResponseEntity.ok(service.getLoadsByCompany(companyId));
+    public ResponseEntity<List<FreightLoadResponse>> getLoadsByCompany(
+            @PathVariable String companyId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        return ResponseEntity.ok(service.getLoadsByCompany(companyId, authenticatedUserId, authenticatedRole));
     }
 }

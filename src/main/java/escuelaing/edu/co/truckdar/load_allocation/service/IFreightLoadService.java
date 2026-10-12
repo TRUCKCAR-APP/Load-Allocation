@@ -15,7 +15,8 @@ import java.util.List;
 import java.util.UUID;
 
 public interface IFreightLoadService {
-    FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId);
+    FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId, String authenticatedUserId,
+                                    String authenticatedRole);
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
     FreightLoadResponse notifyAssignment(Long loadId);
     boolean applyAssignmentNotified(Long loadId, String notifiedDriverId);
@@ -34,5 +35,6 @@ public interface IFreightLoadService {
     ProofOfDeliveryResponse getProofOfDelivery(Long loadId, String authenticatedUserId, String authenticatedRole);
     FreightLoadResponse getLoadById(Long loadId);
     List<FreightLoadResponse> getAvailableLoads(TruckTypeRequired truckType);
-    List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId);
+    List<FreightLoadResponse> getLoadsByCompany(String generatorCompanyId, String authenticatedUserId, String authenticatedRole);
+    List<FreightLoadResponse> getPublishedLoads(String authenticatedUserId);
 }
