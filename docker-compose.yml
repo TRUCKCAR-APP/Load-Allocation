@@ -3,11 +3,11 @@ version: '3.8'
 services:
   postgis:
     image: postgis/postgis:16-3.4-alpine
-    container_name: truckdar-postgis
+    container_name: truckcar-postgis
     environment:
-      POSTGRES_DB: truckdar_alerts_db
-      POSTGRES_USER: truckdar_user
-      POSTGRES_PASSWORD: truckdar_password
+      POSTGRES_DB: truckcar_alerts_db
+      POSTGRES_USER: truckcar_user
+      POSTGRES_PASSWORD: truckcar_password
     ports:
       - "5432:5432"
     volumes:
@@ -16,7 +16,7 @@ services:
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
-    container_name: truckdar-zookeeper
+    container_name: truckcar-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -25,7 +25,7 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
-    container_name: truckdar-kafka
+    container_name: truckcar-kafka
     depends_on:
       - zookeeper
     ports:

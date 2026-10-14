@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# TruckDar - Prueba E2E del ciclo de asignación de carga a través del api-gateway.
+# TruckCar - Prueba E2E del ciclo de asignación de carga a través del api-gateway.
 #
 #   0. Cierra los compromisos previos del conductor real: rechaza propuestas NOTIFIED, vence las PROPOSED,
 #      cancela las cargas ASSIGNED y cierra con entrega los viajes IN_TRANSIT de ejecuciones anteriores.
@@ -21,7 +21,7 @@
 #        PASSWORD=... ACCEPT=1 bash scripts/e2e/e2e-asignacion.sh   # además acepta y planea la ruta
 #
 # Requiere: infraestructura (docker compose up -d) y los microservicios + api-gateway corriendo.
-#   User-Identity, api-gateway y Notifications deben arrancar con el MISMO TRUCKDAR_JWT_SECRET
+#   User-Identity, api-gateway y Notifications deben arrancar con el MISMO TRUCKCAR_JWT_SECRET
 #   (Base64, >= 256 bits; JWT_SECRET se acepta como nombre heredado). El script no necesita el
 #   secreto (obtiene los tokens con login); si los servicios no lo comparten, verá 401 desde la sección 2.
 # =============================================================================
@@ -29,8 +29,8 @@ set -uo pipefail
 
 GATEWAY="${GATEWAY:-http://localhost:8000}"
 API="$GATEWAY/api/v1"
-COORD_EMAIL="${COORD_EMAIL:-coord.e2e@truckdar.co}"
-DRIVER_EMAIL="${DRIVER_EMAIL:-conductor.e2e@truckdar.co}"
+COORD_EMAIL="${COORD_EMAIL:-coord.e2e@truckcar.co}"
+DRIVER_EMAIL="${DRIVER_EMAIL:-conductor.e2e@truckcar.co}"
 # Contraseña de los usuarios de prueba: se pasa por entorno, nunca se versiona.
 PASSWORD="${PASSWORD:?Defina PASSWORD con la contraseña de los usuarios de prueba (ej. PASSWORD=... bash scripts/e2e/e2e-asignacion.sh)}"
 DRIVER_ID="${DRIVER_ID:-207a8e39-990e-48da-9b85-10178c83a8cb}"
@@ -108,7 +108,7 @@ JSON
 }
 
 RUN_ID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf 'e2e-%s' "$(date +%s)")"
-echo "TruckDar E2E asignación | gateway=$GATEWAY | correlationId=$RUN_ID"
+echo "TruckCar E2E asignación | gateway=$GATEWAY | correlationId=$RUN_ID"
 
 # ----------------------------------------------------------------- 0. salud
 section "0. Salud del api-gateway"
@@ -292,7 +292,7 @@ if [ "$ACCEPT" = "1" ]; then
     expect_code 400 "una firma SVG con scripts se rechaza"
     # Firma PNG de 1x1 px y foto por URL: suficiente para validar el contrato del POD.
     SIGNATURE='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
-    PHOTO_URL='https://evidencias.truckdar.co/e2e/entrega.jpg'
+    PHOTO_URL='https://evidencias.truckcar.co/e2e/entrega.jpg'
     call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
         "{\"receiverName\":\"Jefe de Bodega Cali\",\"receiverDocument\":\"CC 1020304050\",\"notes\":\"Sin novedades\",
           \"signatureDataUrl\":\"$SIGNATURE\",\"photoUrl\":\"$PHOTO_URL\"}"

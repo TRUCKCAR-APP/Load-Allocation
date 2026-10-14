@@ -6,9 +6,9 @@ spring:
     name: ms-load-allocation
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/truckdar_db
-    username: truckdar_admin
-    password: truckdar_password
+    url: jdbc:postgresql://localhost:5432/truckcar_db
+    username: truckcar_admin
+    password: truckcar_password
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -27,16 +27,16 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
-truckdar:
+truckcar:
   kafka:
     topic:
-      load-events: ${TRUCKDAR_LOAD_EVENTS_TOPIC:truckdar.events.load-allocation}
-      assignment-notifications: ${TRUCKDAR_ASSIGNMENT_NOTIFICATIONS_TOPIC:truckdar.events.assignment-notifications}
-      allocation-results: ${TRUCKDAR_ALLOCATION_RESULTS_TOPIC:truckdar.events.fleet-allocation-results}
+      load-events: ${TRUCKCAR_LOAD_EVENTS_TOPIC:truckcar.events.load-allocation}
+      assignment-notifications: ${TRUCKCAR_ASSIGNMENT_NOTIFICATIONS_TOPIC:truckcar.events.assignment-notifications}
+      allocation-results: ${TRUCKCAR_ALLOCATION_RESULTS_TOPIC:truckcar.events.fleet-allocation-results}
   assignment:
-    max-attempts: ${TRUCKDAR_ASSIGNMENT_MAX_ATTEMPTS:5}
-    response-timeout-minutes: ${TRUCKDAR_ASSIGNMENT_RESPONSE_TIMEOUT_MINUTES:5}
-    timeout-check-interval-ms: ${TRUCKDAR_ASSIGNMENT_TIMEOUT_CHECK_INTERVAL_MS:30000}
+    max-attempts: ${TRUCKCAR_ASSIGNMENT_MAX_ATTEMPTS:5}
+    response-timeout-minutes: ${TRUCKCAR_ASSIGNMENT_RESPONSE_TIMEOUT_MINUTES:5}
+    timeout-check-interval-ms: ${TRUCKCAR_ASSIGNMENT_TIMEOUT_CHECK_INTERVAL_MS:30000}
   outbox:
-    publish-interval-ms: ${TRUCKDAR_OUTBOX_PUBLISH_INTERVAL_MS:1000}
-    batch-size: ${TRUCKDAR_OUTBOX_BATCH_SIZE:100}
+    publish-interval-ms: ${TRUCKCAR_OUTBOX_PUBLISH_INTERVAL_MS:1000}
+    batch-size: ${TRUCKCAR_OUTBOX_BATCH_SIZE:100}
