@@ -19,6 +19,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -29,6 +30,7 @@ public class FreightLoadController {
 
     private static final String AUTH_USER_HEADER = "X-Auth-User";
     private static final String AUTH_ROLE_HEADER = "X-Auth-Role";
+    private static final Set<String> DISPATCH_ROLES = Set.of("COORDINADOR", "ADMIN", "SYSTEM");
 
     private final IFreightLoadService service;
 
@@ -57,7 +59,7 @@ public class FreightLoadController {
             @PathVariable Long loadId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole,
             @Valid @RequestBody AssignDriverRequest request) {
-        denyGenerator(authenticatedRole);
+        requireDispatcher(authenticatedRole);
         return ResponseEntity.ok(service.assignDriver(loadId, request));
     }
 
@@ -65,7 +67,7 @@ public class FreightLoadController {
     public ResponseEntity<FreightLoadResponse> notifyAssignment(
             @PathVariable Long loadId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
-        denyGenerator(authenticatedRole);
+        requireDispatcher(authenticatedRole);
         return ResponseEntity.ok(service.notifyAssignment(loadId));
     }
 
@@ -147,7 +149,7 @@ public class FreightLoadController {
     public ResponseEntity<FreightLoadResponse> timeoutAssignment(
             @PathVariable Long loadId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
-        denyGenerator(authenticatedRole);
+        requireDispatcher(authenticatedRole);
         return ResponseEntity.ok(service.timeoutAssignment(loadId));
     }
 
@@ -175,12 +177,17 @@ public class FreightLoadController {
     }
 
     /**
-     * Operaciones del ciclo de asignación (proponer, notificar, vencer): las usan los servicios internos y la torre
-     * de control; una empresa generadora no puede invocarlas.
+     * Operaciones del ciclo de asignación (proponer, notificar, vencer): solo la torre de control (COORDINADOR, ADMIN)
+     * y el motor de asignación, que llama por la red interna con X-Auth-Role: SYSTEM. El gateway fija X-Auth-Role desde
+     * el JWT y descarta el que envíe el cliente, y ningún usuario tiene rol SYSTEM: un CONDUCTOR no puede autoasignarse.
      */
-    private static void denyGenerator(String authenticatedRole) {
-        if ("GENERADOR".equals(authenticatedRole)) {
-            throw new AssignmentAccessDeniedException("Un GENERADOR no puede operar el ciclo de asignación", false);
+    private static void requireDispatcher(String authenticatedRole) {
+        if (authenticatedRole == null || authenticatedRole.isBlank()) {
+            throw new AssignmentAccessDeniedException("Se requiere un rol autenticado para operar la asignación", true);
+        }
+        if (!DISPATCH_ROLES.contains(authenticatedRole)) {
+            throw new AssignmentAccessDeniedException("El rol " + authenticatedRole
+                    + " no puede operar el ciclo de asignación (solo COORDINADOR, ADMIN o el motor de asignación)", false);
         }
     }
 }
