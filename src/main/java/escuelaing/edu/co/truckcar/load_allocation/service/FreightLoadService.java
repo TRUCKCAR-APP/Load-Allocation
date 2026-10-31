@@ -184,6 +184,7 @@ public class FreightLoadService implements IFreightLoadService {
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.timeout");
+        AssignmentMetrics.countOutcome("timeout");
         log.info("Propuesta de la carga #{} venció sin respuesta del conductor {}", loadId, load.getAssignedDriverId());
         return true;
     }
@@ -197,6 +198,11 @@ public class FreightLoadService implements IFreightLoadService {
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.proposed");
+        AssignmentMetrics.countOutcome("proposed");
+        if (updated.getAssignmentAttempts() == 1
+                && (updated.getDiscardedDriverIds() == null || updated.getDiscardedDriverIds().isEmpty())) {
+            AssignmentMetrics.recordLatency("proposed", updated.getPublishedAt());
+        }
         return updated;
     }
 
@@ -205,6 +211,7 @@ public class FreightLoadService implements IFreightLoadService {
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.unassigned");
+        AssignmentMetrics.countOutcome("unassigned");
         log.warn("Carga #{} queda sin conductor: {}", load.getId(), reason);
     }
 
@@ -268,6 +275,8 @@ public class FreightLoadService implements IFreightLoadService {
         load.setAssignedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.accepted");
+        AssignmentMetrics.countOutcome("accepted");
+        AssignmentMetrics.recordLatency("accepted", updated.getPublishedAt());
         return mapToResponse(updated);
     }
 
@@ -279,6 +288,7 @@ public class FreightLoadService implements IFreightLoadService {
         discardCurrentDriver(load);
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.rejected");
+        AssignmentMetrics.countOutcome("rejected");
         return mapToResponse(updated);
     }
 
@@ -316,6 +326,7 @@ public class FreightLoadService implements IFreightLoadService {
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.timeout");
+        AssignmentMetrics.countOutcome("timeout");
         return mapToResponse(updated);
     }
 
