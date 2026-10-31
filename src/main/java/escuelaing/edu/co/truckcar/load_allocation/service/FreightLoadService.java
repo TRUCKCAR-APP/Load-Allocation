@@ -154,7 +154,11 @@ public class FreightLoadService implements IFreightLoadService {
     @Transactional
     public boolean markNoDriversAvailable(Long loadId) {
         FreightLoad load = repository.findById(loadId).orElse(null);
-        if (load == null || !isOpenForAssignment(load) || !REASSIGNABLE.contains(load.getAssignmentStatus())) {
+        // También una carga nunca propuesta (assignmentStatus null): el motor la aplaza cuando no hay candidatos o
+        // cuando fleets-drivers no responde, y queda visible como UNASSIGNED_NO_DRIVERS hasta el siguiente reintento.
+        boolean waitingForDriver = load != null
+                && (load.getAssignmentStatus() == null || REASSIGNABLE.contains(load.getAssignmentStatus()));
+        if (load == null || !isOpenForAssignment(load) || !waitingForDriver) {
             log.info("Aviso de falta de candidatos ignorado para carga #{}", loadId);
             return false;
         }

@@ -124,6 +124,19 @@ class FreightLoadServiceReassignmentLoopTest {
     }
 
     @Test
+    void noCandidatesMarksNeverProposedLoadUnassignedButNotAnActiveProposal() {
+        // Carga recién publicada que el motor aplazó (sin candidatos o vecinos caídos): queda en espera visible.
+        assertThat(service.markNoDriversAvailable(21L)).isTrue();
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.UNASSIGNED_NO_DRIVERS);
+
+        FreightLoad proposed = FreightLoad.builder().id(22L).status(LoadStatus.AVAILABLE)
+                .assignmentStatus(AssignmentStatus.NOTIFIED).build();
+        when(repository.findById(22L)).thenReturn(Optional.of(proposed));
+        assertThat(service.markNoDriversAvailable(22L)).isFalse();
+        assertThat(proposed.getAssignmentStatus()).isEqualTo(AssignmentStatus.NOTIFIED);
+    }
+
+    @Test
     void expiresOnlyNotificationsOlderThanCutoff() {
         proposeAndNotify("driver-1");
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(5);
