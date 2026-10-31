@@ -6,11 +6,13 @@ import escuelaing.edu.co.truckcar.load_allocation.model.LoadStatus;
 import escuelaing.edu.co.truckcar.load_allocation.model.TruckTypeRequired;
 import escuelaing.edu.co.truckcar.load_allocation.model.OutboxEvent;
 import escuelaing.edu.co.truckcar.load_allocation.repository.OutboxEventRepository;
+import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -24,13 +26,17 @@ import static org.mockito.Mockito.verify;
 @ExtendWith(MockitoExtension.class)
 class OutboxEventServiceTest {
 
+    /** Sin Tracer en el contexto: los eventos se guardan sin traceparent. */
+    private static final OutboxTracing NO_TRACING =
+            new OutboxTracing(new StaticListableBeanFactory().getBeanProvider(Tracer.class));
+
     @Mock
     private OutboxEventRepository repository;
 
     @Test
     void enqueuesSerializedEnvelopeForTheSameLoadTransaction() throws Exception {
         OutboxEventService service = new OutboxEventService(repository, new ObjectMapper()
-                .findAndRegisterModules());
+                .findAndRegisterModules(), NO_TRACING);
         FreightLoad load = FreightLoad.builder()
                 .id(42L)
                 .generatorCompanyId("company-1")
@@ -59,7 +65,7 @@ class OutboxEventServiceTest {
     @Test
     void reusesLoadCorrelationIdForEveryEventOfTheLoad() throws Exception {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        OutboxEventService service = new OutboxEventService(repository, mapper);
+        OutboxEventService service = new OutboxEventService(repository, mapper, NO_TRACING);
         UUID correlationId = UUID.randomUUID();
         FreightLoad load = sampleLoad();
         load.setCorrelationId(correlationId);
@@ -79,7 +85,7 @@ class OutboxEventServiceTest {
     @Test
     void assignsAndKeepsCorrelationIdForLoadsCreatedBeforeTheField() throws Exception {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        OutboxEventService service = new OutboxEventService(repository, mapper);
+        OutboxEventService service = new OutboxEventService(repository, mapper, NO_TRACING);
         FreightLoad legacyLoad = sampleLoad();
 
         service.enqueueLoadEvent(legacyLoad, "assignment.rejected");

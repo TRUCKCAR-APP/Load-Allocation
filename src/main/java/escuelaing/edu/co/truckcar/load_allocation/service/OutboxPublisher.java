@@ -28,6 +28,7 @@ public class OutboxPublisher {
     private final OutboxEventRepository repository;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final OutboxTracing tracing;
 
     @Value("${truckcar.kafka.topic.load-events:truckcar.events.load-allocation}")
     private String loadEventsTopic;
@@ -52,14 +53,35 @@ public class OutboxPublisher {
     private void publish(OutboxEvent outboxEvent) {
         try {
             JsonNode envelope = objectMapper.readTree(outboxEvent.getPayload());
-            kafkaTemplate.send(loadEventsTopic, outboxEvent.getAggregateId(), envelope)
-                    .get(10, TimeUnit.SECONDS);
+            sendInOriginalTrace(outboxEvent, envelope);
             markPublished(outboxEvent);
         } catch (JsonProcessingException | InterruptedException | ExecutionException | TimeoutException exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             markFailed(outboxEvent, exception);
+        }
+    }
+
+    private void sendInOriginalTrace(OutboxEvent outboxEvent, JsonNode envelope)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        Exception[] failure = new Exception[1];
+        tracing.publishInTrace(outboxEvent.getTraceParent(), outboxEvent.getCorrelationId(),
+                "outbox publish " + outboxEvent.getEventType(), () -> {
+                    try {
+                        kafkaTemplate.send(loadEventsTopic, outboxEvent.getAggregateId(), envelope).get(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                        failure[0] = e;
+                    }
+                });
+        if (failure[0] instanceof InterruptedException interrupted) {
+            throw interrupted;
+        }
+        if (failure[0] instanceof ExecutionException execution) {
+            throw execution;
+        }
+        if (failure[0] instanceof TimeoutException timeout) {
+            throw timeout;
         }
     }
 

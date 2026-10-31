@@ -46,4 +46,11 @@ public class OutboxEvent {
 
     @Column(name = "last_error", length = 2000)
     private String lastError;
+
+    /** traceparent W3C de la petición que originó el evento (OutboxTracing). */
+    @Column(name = "trace_parent", length = 55)
+    private String traceParent;
+
+    @Column(name = "correlation_id", length = 100)
+    private String correlationId;
 }
