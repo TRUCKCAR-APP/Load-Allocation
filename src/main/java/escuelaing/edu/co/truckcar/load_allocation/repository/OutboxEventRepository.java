@@ -16,6 +16,13 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
 
     List<OutboxEvent> findByPublishedAtIsNullOrderByCreatedAtAsc(Pageable pageable);
 
+    /**
+     * Candado de PostgreSQL de la transacción actual (se libera al confirmarla): con varias réplicas solo una publica
+     * el outbox a la vez, sin eventos duplicados y conservando el orden por carga.
+     */
+    @Query(value = "select pg_try_advisory_xact_lock(:key)", nativeQuery = true)
+    boolean tryAcquirePublisherLock(@Param("key") long key);
+
     @Modifying
     @Transactional
     @Query("""

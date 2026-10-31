@@ -35,8 +35,15 @@ public class OutboxPublisher {
     @Value("${truckcar.outbox.batch-size:100}")
     private int batchSize;
 
+    /** Clave del candado del outbox; distinta en cada servicio porque comparten truckcar_db. */
+    private static final long PUBLISHER_LOCK_KEY = 7_301_001L;
+
     @Scheduled(fixedDelayString = "${truckcar.outbox.publish-interval-ms:1000}")
+    @Transactional
     public void publishPendingEvents() {
+        if (!repository.tryAcquirePublisherLock(PUBLISHER_LOCK_KEY)) {
+            return; // otra réplica está publicando este ciclo
+        }
         List<OutboxEvent> pending = repository.findByPublishedAtIsNullOrderByCreatedAtAsc(
                 PageRequest.of(0, batchSize));
         pending.forEach(this::publish);
