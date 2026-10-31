@@ -9,8 +9,9 @@ spring:
     # Fuera de Docker (IDE/tests) la conexión es directa y el esquema va en currentSchema. En Docker se pasa por
     # PgBouncer y el search_path lo fija el rol del servicio.
     url: jdbc:postgresql://localhost:5432/truckcar_db?currentSchema=load_allocation,public
-    username: truckcar_admin
-    password: truckcar_password
+    username: ${DB_USER:truckcar_admin}
+    # Sin valor por defecto: fuera de Docker se define DB_PASSWORD (en el CI, el de su PostgreSQL efímero).
+    password: ${DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -62,8 +63,9 @@ truckcar:
       public-endpoint: ${TRUCKCAR_S3_PUBLIC_ENDPOINT:http://localhost:5500}
       region: ${TRUCKCAR_S3_REGION:us-east-1}
       bucket: ${TRUCKCAR_S3_BUCKET:pod-media}
-      access-key: ${TRUCKCAR_S3_ACCESS_KEY:truckcar}
-      secret-key: ${TRUCKCAR_S3_SECRET_KEY:truckcar_s3_dev_secret}
+      # Sin credenciales por defecto: vacías, el SDK usa la cadena estándar de AWS (rol IAM / IRSA).
+      access-key: ${TRUCKCAR_S3_ACCESS_KEY:}
+      secret-key: ${TRUCKCAR_S3_SECRET_KEY:}
       path-style: true
       upload-url-ttl: 10m
       download-url-ttl: 10m
