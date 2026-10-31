@@ -6,15 +6,28 @@ spring:
     name: ms-load-allocation
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/truckcar_db
+    # Fuera de Docker (IDE/tests) la conexión es directa y el esquema va en currentSchema. En Docker se pasa por
+    # PgBouncer y el search_path lo fija el rol del servicio.
+    url: jdbc:postgresql://localhost:5432/truckcar_db?currentSchema=load_allocation,public
     username: truckcar_admin
     password: truckcar_password
     driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
-      ddl-auto: update
+      # El esquema lo gestiona Flyway (db/migration); Hibernate solo comprueba que coincida con las entidades.
+      ddl-auto: validate
     show-sql: false
+
+  flyway:
+    enabled: true
+    # Esquema propio del servicio (rol y esquema creados por db-init); el historial de Flyway vive en él.
+    schemas: load_allocation
+    default-schema: load_allocation
+    # Bases anteriores a Flyway (tablas creadas por Hibernate): línea base 0 para que V1 (idempotente) se aplique.
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -40,3 +53,19 @@ truckcar:
   outbox:
     publish-interval-ms: ${TRUCKCAR_OUTBOX_PUBLISH_INTERVAL_MS:1000}
     batch-size: ${TRUCKCAR_OUTBOX_BATCH_SIZE:100}
+  # Evidencias de entrega (POD) en almacenamiento S3. endpoint: dirección interna para HeadObject/PutObject (vacío =
+  # Amazon S3). public-endpoint: base con la que se firman las URLs que usa la PWA; en Docker es el nginx del
+  # frontend (/pod-media/ en el mismo origen que la app).
+  storage:
+    s3:
+      endpoint: ${TRUCKCAR_S3_ENDPOINT:http://localhost:9000}
+      public-endpoint: ${TRUCKCAR_S3_PUBLIC_ENDPOINT:http://localhost:5500}
+      region: ${TRUCKCAR_S3_REGION:us-east-1}
+      bucket: ${TRUCKCAR_S3_BUCKET:pod-media}
+      access-key: ${TRUCKCAR_S3_ACCESS_KEY:truckcar}
+      secret-key: ${TRUCKCAR_S3_SECRET_KEY:truckcar_s3_dev_secret}
+      path-style: true
+      upload-url-ttl: 10m
+      download-url-ttl: 10m
+      max-photo-bytes: 5242880
+      max-signature-bytes: 524288

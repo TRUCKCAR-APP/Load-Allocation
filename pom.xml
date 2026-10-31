@@ -16,6 +16,7 @@
 
 	<properties>
 		<java.version>21</java.version>
+		<aws.sdk.version>2.27.21</aws.sdk.version>
 	</properties>
 
 	<dependencies>
@@ -33,6 +34,23 @@
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Esquema del servicio versionado con Flyway (ddl-auto: validate) -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+
+		<!-- Evidencias de entrega (POD) en S3: URLs prefirmadas de subida y descarga -->
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>s3</artifactId>
+			<version>${aws.sdk.version}</version>
 		</dependency>
 
 		<dependency>

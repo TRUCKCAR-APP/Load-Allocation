@@ -36,6 +36,16 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(error, HttpStatus.CONFLICT);
     }
 
+    @ExceptionHandler(ProofOfDeliveryEvidenceException.class)
+    public ResponseEntity<Map<String, Object>> handleEvidence(ProofOfDeliveryEvidenceException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", LocalDateTime.now());
+        error.put("status", HttpStatus.UNPROCESSABLE_ENTITY.value());
+        error.put("error", "Evidencia de entrega inválida");
+        error.put("message", ex.getMessage());
+        return new ResponseEntity<>(error, HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
     @ExceptionHandler(AssignmentAccessDeniedException.class)
     public ResponseEntity<Map<String, Object>> handleAccessDenied(AssignmentAccessDeniedException ex) {
         HttpStatus status = ex.isUnauthenticated() ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN;

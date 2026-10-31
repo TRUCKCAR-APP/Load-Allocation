@@ -27,7 +27,13 @@ public interface IFreightLoadService {
     FreightLoadResponse rejectAssignment(Long loadId, String authenticatedUserId);
     FreightLoadResponse timeoutAssignment(Long loadId);
     FreightLoadResponse startTrip(Long loadId, String authenticatedUserId);
+    /** startedAt: hora del dispositivo (eventos sincronizados desde la cola offline de la PWA). */
+    FreightLoadResponse startTrip(Long loadId, String authenticatedUserId, LocalDateTime startedAt);
     FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod);
+    FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod,
+                                    LocalDateTime deliveredAt);
+    /** El conductor asignado puede subir evidencias mientras la carga está ASSIGNED o IN_TRANSIT. */
+    void requireDriverCanUploadProof(Long loadId, String authenticatedUserId);
     FreightLoadResponse cancelLoad(Long loadId, String authenticatedUserId, String authenticatedRole, CancelLoadRequest request);
     List<FreightLoadResponse> getLoadsForDriver(String authenticatedUserId);
     List<FreightLoadResponse> listLoads(List<LoadStatus> statuses, String authenticatedUserId, String authenticatedRole);

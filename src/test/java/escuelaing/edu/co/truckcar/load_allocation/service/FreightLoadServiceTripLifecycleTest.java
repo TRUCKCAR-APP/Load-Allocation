@@ -2,6 +2,7 @@ package escuelaing.edu.co.truckcar.load_allocation.service;
 
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.DeliveryConfirmationRequest;
+import escuelaing.edu.co.truckcar.load_allocation.dto.request.PodObjectReference;
 import escuelaing.edu.co.truckcar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckcar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckcar.load_allocation.exception.InvalidLoadOperationException;
@@ -183,16 +184,21 @@ class FreightLoadServiceTripLifecycleTest {
                 .isInstanceOf(AssignmentAccessDeniedException.class);
     }
 
-    private static final String SIGNATURE = "data:image/png;base64,iVBORw0KGgo=";
-    private static final String PHOTO = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+    private static final String SHA = "b".repeat(64);
+    private static final String SIGNATURE_KEY = "pod/30/signature-" + SHA + ".png";
+    private static final String PHOTO_KEY = "pod/30/photo-" + SHA + ".jpg";
+
+    private static PodObjectReference reference(String key, String type) {
+        return PodObjectReference.builder().objectKey(key).sha256(SHA).contentType(type).sizeBytes(4096L).build();
+    }
 
     @Test
-    void deliveryStoresSignatureAndPhotoOutsideTheLoad() {
+    void deliveryStoresOnlyReferencesToTheEvidenceObjects() {
         FreightLoad load = load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED);
         FreightLoadService service = serviceWith(load);
         DeliveryConfirmationRequest pod = pod();
-        pod.setSignatureDataUrl(SIGNATURE);
-        pod.setPhotoUrl(PHOTO);
+        pod.setSignature(reference(SIGNATURE_KEY, "image/png"));
+        pod.setPhoto(reference(PHOTO_KEY, "image/jpeg"));
 
         FreightLoadResponse delivered = service.deliverLoad(30L, DRIVER, pod);
 
@@ -201,8 +207,27 @@ class FreightLoadServiceTripLifecycleTest {
         org.mockito.ArgumentCaptor<ProofOfDeliveryMedia> media = org.mockito.ArgumentCaptor.forClass(ProofOfDeliveryMedia.class);
         verify(podMediaRepository).save(media.capture());
         assertThat(media.getValue().getLoadId()).isEqualTo(30L);
-        assertThat(media.getValue().getSignatureDataUrl()).isEqualTo(SIGNATURE);
-        assertThat(media.getValue().getPhotoUrl()).isEqualTo(PHOTO);
+        assertThat(media.getValue().getSignatureObjectKey()).isEqualTo(SIGNATURE_KEY);
+        assertThat(media.getValue().getSignatureSha256()).isEqualTo(SHA);
+        assertThat(media.getValue().getPhotoObjectKey()).isEqualTo(PHOTO_KEY);
+        assertThat(media.getValue().getPhotoSizeBytes()).isEqualTo(4096L);
+    }
+
+    @Test
+    void offlineDeliveryKeepsTheDeviceTimeAndRejectsEvidenceOfAnotherLoad() {
+        FreightLoad load = load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED);
+        FreightLoadService service = serviceWith(load);
+        DeliveryConfirmationRequest foreign = pod();
+        foreign.setPhoto(reference("pod/99/photo-" + SHA + ".jpg", "image/jpeg"));
+
+        assertThatThrownBy(() -> service.deliverLoad(30L, DRIVER, foreign))
+                .isInstanceOf(InvalidLoadOperationException.class)
+                .hasMessageContaining("no es una evidencia PHOTO de la carga #30");
+        assertThat(load.getStatus()).isEqualTo(LoadStatus.IN_TRANSIT);
+
+        LocalDateTime offlineDeliveredAt = LocalDateTime.now().minusHours(3);
+        service.deliverLoad(30L, DRIVER, pod(), offlineDeliveredAt);
+        assertThat(load.getDeliveredAt()).isEqualTo(offlineDeliveredAt);
     }
 
     @Test
@@ -221,11 +246,12 @@ class FreightLoadServiceTripLifecycleTest {
         load.setPodReceiverName("Jefe de Bodega");
         load.setPodHasSignature(true);
         when(podMediaRepository.findById(30L)).thenReturn(Optional.of(ProofOfDeliveryMedia.builder()
-                .loadId(30L).signatureDataUrl(SIGNATURE).photoUrl(PHOTO).build()));
+                .loadId(30L).signatureObjectKey(SIGNATURE_KEY).signatureSha256(SHA).photoObjectKey(PHOTO_KEY).build()));
         FreightLoadService service = serviceWith(load);
 
-        assertThat(service.getProofOfDelivery(30L, DRIVER, "CONDUCTOR").getSignatureDataUrl()).isEqualTo(SIGNATURE);
-        assertThat(service.getProofOfDelivery(30L, "coord-1", "COORDINADOR").getPhotoUrl()).isEqualTo(PHOTO);
+        assertThat(service.getProofOfDelivery(30L, DRIVER, "CONDUCTOR").getSignatureObjectKey()).isEqualTo(SIGNATURE_KEY);
+        assertThat(service.getProofOfDelivery(30L, DRIVER, "CONDUCTOR").getSignatureSha256()).isEqualTo(SHA);
+        assertThat(service.getProofOfDelivery(30L, "coord-1", "COORDINADOR").getPhotoObjectKey()).isEqualTo(PHOTO_KEY);
         assertThat(service.getProofOfDelivery(30L, "coord-1", "COORDINADOR").getReceiverName()).isEqualTo("Jefe de Bodega");
         assertThatThrownBy(() -> service.getProofOfDelivery(30L, "otro-conductor", "CONDUCTOR"))
                 .isInstanceOf(AssignmentAccessDeniedException.class);

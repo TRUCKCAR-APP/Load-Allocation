@@ -5,50 +5,49 @@ import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** La entrega solo acepta referencias a evidencias en el almacenamiento: nunca imágenes en Base64. */
 class DeliveryConfirmationRequestValidationTest {
 
+    private static final String SHA = "a".repeat(64);
     private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
-    private Set<ConstraintViolation<DeliveryConfirmationRequest>> validate(String signature, String photo) {
+    private Set<ConstraintViolation<DeliveryConfirmationRequest>> validate(PodObjectReference signature,
+                                                                           PodObjectReference photo) {
         return validator.validate(DeliveryConfirmationRequest.builder()
-                .receiverName("Jefe de Bodega").signatureDataUrl(signature).photoUrl(photo).build());
+                .receiverName("Jefe de Bodega").signature(signature).photo(photo).build());
     }
 
-    private static String svg(String content) {
-        return "data:image/svg+xml;base64," + Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8));
-    }
-
-    @Test
-    void acceptsPngSignatureAndPhotoAsDataUrlOrHttpUrl() {
-        assertThat(validate("data:image/png;base64,iVBORw0KGgo=", "data:image/jpeg;base64,/9j/4AAQ")).isEmpty();
-        assertThat(validate(null, "https://evidencias.truckcar.co/pod/30.jpg")).isEmpty();
-        assertThat(validate(svg("<svg xmlns='http://www.w3.org/2000/svg'><path d='M0 0L10 10'/></svg>"), null)).isEmpty();
+    private static PodObjectReference reference(String key, String sha, String type, long size) {
+        return PodObjectReference.builder().objectKey(key).sha256(sha).contentType(type).sizeBytes(size).build();
     }
 
     @Test
-    void rejectsNonImageOrMalformedPayloads() {
-        assertThat(validate("data:text/html;base64,PGgxPg==", null)).isNotEmpty();
-        assertThat(validate("javascript:alert(1)", null)).isNotEmpty();
-        assertThat(validate(null, "data:image/svg+xml;base64,PHN2Zz4=")).isNotEmpty();
-        assertThat(validate(null, "ftp://servidor/foto.jpg")).isNotEmpty();
+    void acceptsDeliveryWithoutEvidenceOrWithValidReferences() {
+        assertThat(validate(null, null)).isEmpty();
+        assertThat(validate(reference("pod/30/signature-" + SHA + ".png", SHA, "image/png", 2048),
+                reference("pod/30/photo-" + SHA + ".jpg", SHA, "image/jpeg", 350_000))).isEmpty();
     }
 
     @Test
-    void rejectsSvgSignaturesWithScriptsHandlersOrExternalLinks() {
-        assertThat(validate(svg("<svg><script>alert(1)</script></svg>"), null)).isNotEmpty();
-        assertThat(validate(svg("<svg onload=\"alert(1)\"></svg>"), null)).isNotEmpty();
-        assertThat(validate(svg("<svg><image href=\"https://tracker.example/x.png\"/></svg>"), null)).isNotEmpty();
+    void rejectsBase64OrForeignKeysAndMalformedHashes() {
+        assertThat(validate(reference("data:image/png;base64,iVBORw0KGgo=", SHA, "image/png", 10), null))
+                .extracting(ConstraintViolation::getMessage)
+                .contains("La clave del archivo no corresponde a una evidencia de entrega");
+        assertThat(validate(reference("../otro-bucket/secreto.png", SHA, "image/png", 10), null)).isNotEmpty();
+        assertThat(validate(reference("pod/30/signature-" + SHA + ".png", "no-es-sha", "image/png", 10), null))
+                .extracting(ConstraintViolation::getMessage)
+                .contains("El hash debe ser SHA-256 en hexadecimal (64 caracteres)");
     }
 
     @Test
-    void rejectsOversizedSignatures() {
-        String huge = "data:image/png;base64," + "A".repeat(DeliveryConfirmationRequest.MAX_SIGNATURE_LENGTH);
-        assertThat(validate(huge, null)).extracting(ConstraintViolation::getMessage).contains("La firma no puede superar 500 KB");
+    void rejectsSvgAndEmptyFiles() {
+        assertThat(validate(reference("pod/30/signature-" + SHA + ".png", SHA, "image/svg+xml", 10), null))
+                .extracting(ConstraintViolation::getMessage)
+                .contains("El archivo debe ser una imagen PNG, JPEG o WebP");
+        assertThat(validate(reference("pod/30/signature-" + SHA + ".png", SHA, "image/png", 0), null)).isNotEmpty();
     }
 }

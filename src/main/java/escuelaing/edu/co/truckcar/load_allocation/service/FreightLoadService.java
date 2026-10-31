@@ -4,6 +4,8 @@ import escuelaing.edu.co.truckcar.load_allocation.dto.request.AssignDriverReques
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.CreateFreightLoadRequest;
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.DeliveryConfirmationRequest;
+import escuelaing.edu.co.truckcar.load_allocation.dto.request.PodObjectReference;
+import escuelaing.edu.co.truckcar.load_allocation.storage.PodMediaKind;
 import escuelaing.edu.co.truckcar.load_allocation.dto.response.DriverCommitmentResponse;
 import escuelaing.edu.co.truckcar.load_allocation.dto.response.FreightLoadResponse;
 import escuelaing.edu.co.truckcar.load_allocation.dto.response.ProofOfDeliveryResponse;
@@ -22,7 +24,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.EnumSet;
@@ -285,7 +286,7 @@ public class FreightLoadService implements IFreightLoadService {
      * Solo el conductor propuesto puede aceptar o rechazar su carga. El api-gateway propaga el sujeto
      * del JWT en X-Auth-User (y descarta cualquier valor enviado por el cliente).
      */
-    private void requireAssignedDriver(Long loadId, String authenticatedUserId, String action) {
+    private FreightLoad requireAssignedDriver(Long loadId, String authenticatedUserId, String action) {
         if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
             throw new AssignmentAccessDeniedException("Se requiere un usuario autenticado para " + action
                     + " la carga #" + loadId, true);
@@ -296,6 +297,7 @@ public class FreightLoadService implements IFreightLoadService {
             throw new AssignmentAccessDeniedException("El usuario " + authenticatedUserId + " no es el conductor asignado a la carga #"
                     + loadId + "; no puede " + action + "la", false);
         }
+        return load;
     }
 
     @Override
@@ -363,10 +365,17 @@ public class FreightLoadService implements IFreightLoadService {
     @Override
     @Transactional
     public FreightLoadResponse startTrip(Long loadId, String authenticatedUserId) {
+        return startTrip(loadId, authenticatedUserId, LocalDateTime.now());
+    }
+
+    /** startedAt: hora del dispositivo cuando el inicio se registró sin señal y llega en un lote offline. */
+    @Override
+    @Transactional
+    public FreightLoadResponse startTrip(Long loadId, String authenticatedUserId, LocalDateTime startedAt) {
         requireAssignedDriver(loadId, authenticatedUserId, "iniciar el viaje de");
         FreightLoad load = requireStatus(loadId, LoadStatus.ASSIGNED, "iniciar el viaje");
         load.setStatus(LoadStatus.IN_TRANSIT);
-        load.setTripStartedAt(LocalDateTime.now());
+        load.setTripStartedAt(startedAt);
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "trip.started");
         log.info("Viaje de la carga #{} iniciado por el conductor {}", loadId, authenticatedUserId);
@@ -377,22 +386,41 @@ public class FreightLoadService implements IFreightLoadService {
     @Override
     @Transactional
     public FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod) {
+        return deliverLoad(loadId, authenticatedUserId, pod, LocalDateTime.now());
+    }
+
+    /**
+     * La firma y la foto llegan como referencias a objetos ya subidos y verificados (ProofOfDeliveryService); aquí se
+     * comprueba además que cada clave pertenezca a esta carga. deliveredAt: hora del dispositivo en entregas offline.
+     */
+    @Override
+    @Transactional
+    public FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod,
+                                           LocalDateTime deliveredAt) {
         requireAssignedDriver(loadId, authenticatedUserId, "entregar");
         FreightLoad load = requireStatus(loadId, LoadStatus.IN_TRANSIT, "registrar la entrega");
+        PodObjectReference signature = pod.getSignature();
+        PodObjectReference photo = pod.getPhoto();
+        requireOwnedKey(loadId, PodMediaKind.SIGNATURE, signature);
+        requireOwnedKey(loadId, PodMediaKind.PHOTO, photo);
         load.setStatus(LoadStatus.DELIVERED);
-        load.setDeliveredAt(LocalDateTime.now());
+        load.setDeliveredAt(deliveredAt);
         load.setPodReceiverName(pod.getReceiverName().trim());
         load.setPodReceiverDocument(pod.getReceiverDocument());
         load.setPodNotes(pod.getNotes());
-        boolean hasSignature = StringUtils.hasText(pod.getSignatureDataUrl());
-        boolean hasPhoto = StringUtils.hasText(pod.getPhotoUrl());
-        load.setPodHasSignature(hasSignature);
-        load.setPodHasPhoto(hasPhoto);
-        if (hasSignature || hasPhoto) {
+        load.setPodHasSignature(signature != null);
+        load.setPodHasPhoto(photo != null);
+        if (signature != null || photo != null) {
             podMediaRepository.save(ProofOfDeliveryMedia.builder()
                     .loadId(loadId)
-                    .signatureDataUrl(hasSignature ? pod.getSignatureDataUrl() : null)
-                    .photoUrl(hasPhoto ? pod.getPhotoUrl() : null)
+                    .signatureObjectKey(signature == null ? null : signature.getObjectKey())
+                    .signatureSha256(signature == null ? null : signature.getSha256())
+                    .signatureContentType(signature == null ? null : signature.getContentType())
+                    .signatureSizeBytes(signature == null ? null : signature.getSizeBytes())
+                    .photoObjectKey(photo == null ? null : photo.getObjectKey())
+                    .photoSha256(photo == null ? null : photo.getSha256())
+                    .photoContentType(photo == null ? null : photo.getContentType())
+                    .photoSizeBytes(photo == null ? null : photo.getSizeBytes())
                     .createdAt(LocalDateTime.now())
                     .build());
         }
@@ -484,9 +512,31 @@ public class FreightLoadService implements IFreightLoadService {
                 .receiverName(load.getPodReceiverName())
                 .receiverDocument(load.getPodReceiverDocument())
                 .notes(load.getPodNotes())
-                .signatureDataUrl(media == null ? null : media.getSignatureDataUrl())
-                .photoUrl(media == null ? null : media.getPhotoUrl())
+                .signatureObjectKey(media == null ? null : media.getSignatureObjectKey())
+                .signatureSha256(media == null ? null : media.getSignatureSha256())
+                .photoObjectKey(media == null ? null : media.getPhotoObjectKey())
+                .photoSha256(media == null ? null : media.getPhotoSha256())
+                // Fotos previas al almacenamiento de objetos que eran un enlace https: se devuelven tal cual.
+                .photoUrl(media == null ? null : media.getPhotoExternalUrl())
                 .build();
+    }
+
+    /** Carga del conductor autenticado lista para recibir evidencias de entrega (ASSIGNED o IN_TRANSIT). */
+    @Override
+    @Transactional(readOnly = true)
+    public void requireDriverCanUploadProof(Long loadId, String authenticatedUserId) {
+        FreightLoad load = requireAssignedDriver(loadId, authenticatedUserId, "subir la prueba de entrega de");
+        if (load.getStatus() != LoadStatus.ASSIGNED && load.getStatus() != LoadStatus.IN_TRANSIT) {
+            throw new InvalidLoadOperationException("La carga #" + loadId + " no admite evidencias de entrega (status="
+                    + load.getStatus() + ")");
+        }
+    }
+
+    private static void requireOwnedKey(Long loadId, PodMediaKind kind, PodObjectReference reference) {
+        if (reference != null && !kind.ownsKey(loadId, reference.getObjectKey())) {
+            throw new InvalidLoadOperationException("El archivo " + reference.getObjectKey() + " no es una evidencia "
+                    + kind + " de la carga #" + loadId);
+        }
     }
 
     /** Tablero de la torre de control: cargas de todos los generadores, filtradas por status (máx. 200 recientes). */

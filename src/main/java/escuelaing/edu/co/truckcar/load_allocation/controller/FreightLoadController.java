@@ -3,10 +3,8 @@ package escuelaing.edu.co.truckcar.load_allocation.controller;
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.AssignDriverRequest;
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.CancelLoadRequest;
 import escuelaing.edu.co.truckcar.load_allocation.dto.request.CreateFreightLoadRequest;
-import escuelaing.edu.co.truckcar.load_allocation.dto.request.DeliveryConfirmationRequest;
 import escuelaing.edu.co.truckcar.load_allocation.dto.response.DriverCommitmentResponse;
 import escuelaing.edu.co.truckcar.load_allocation.dto.response.FreightLoadResponse;
-import escuelaing.edu.co.truckcar.load_allocation.dto.response.ProofOfDeliveryResponse;
 import escuelaing.edu.co.truckcar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckcar.load_allocation.model.CorrelationIds;
 import escuelaing.edu.co.truckcar.load_allocation.model.LoadStatus;
@@ -94,14 +92,7 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.startTrip(loadId, authenticatedUserId));
     }
 
-    /** IN_TRANSIT -> DELIVERED con prueba de entrega (POD). Solo el conductor asignado. */
-    @PatchMapping("/{loadId}/trip/deliver")
-    public ResponseEntity<FreightLoadResponse> deliverLoad(
-            @PathVariable Long loadId,
-            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
-            @Valid @RequestBody DeliveryConfirmationRequest request) {
-        return ResponseEntity.ok(service.deliverLoad(loadId, authenticatedUserId, request));
-    }
+    // La entrega (PATCH /{loadId}/trip/deliver) y la prueba de entrega están en ProofOfDeliveryController.
 
     /** AVAILABLE | ASSIGNED -> CANCELLED. Solo COORDINADOR o ADMIN (rol propagado por el gateway en X-Auth-Role). */
     @PatchMapping("/{loadId}/cancel")
@@ -127,15 +118,6 @@ public class FreightLoadController {
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
         return ResponseEntity.ok(service.listLoads(statuses, authenticatedUserId, authenticatedRole));
-    }
-
-    /** POD completo (firma y foto incluidas): conductor de la carga o torre de control. */
-    @GetMapping("/{loadId}/proof-of-delivery")
-    public ResponseEntity<ProofOfDeliveryResponse> getProofOfDelivery(
-            @PathVariable Long loadId,
-            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
-            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
-        return ResponseEntity.ok(service.getProofOfDelivery(loadId, authenticatedUserId, authenticatedRole));
     }
 
     /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente); lo usa el motor de asignación. */
