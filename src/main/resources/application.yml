@@ -54,6 +54,14 @@ truckcar:
   outbox:
     publish-interval-ms: ${TRUCKCAR_OUTBOX_PUBLISH_INTERVAL_MS:1000}
     batch-size: ${TRUCKCAR_OUTBOX_BATCH_SIZE:100}
+  # Enlaces públicos de seguimiento: token HMAC-SHA256 (secret >= 32 bytes; vacío = clave temporal por proceso),
+  # vencen a las 48 h o 6 h después de la entrega. public-base-url es la PWA que abre el enlace (?track=<token>).
+  tracking:
+    secret: ${TRUCKCAR_TRACKING_LINK_SECRET:}
+    public-base-url: ${TRUCKCAR_PUBLIC_APP_URL:http://localhost:5500/}
+    max-ttl: 48h
+    after-delivery: 6h
+    fleets-drivers-url: ${TRUCKCAR_SERVICES_FLEETS_DRIVERS_URL:http://localhost:8081}
   # Evidencias de entrega (POD) en almacenamiento S3. endpoint: dirección interna para HeadObject/PutObject (vacío =
   # Amazon S3). public-endpoint: base con la que se firman las URLs que usa la PWA; en Docker es el nginx del
   # frontend (/pod-media/ en el mismo origen que la app).

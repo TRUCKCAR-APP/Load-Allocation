@@ -1,6 +1,7 @@
 package escuelaing.edu.co.truckcar.load_allocation.exception;
 
 import lombok.extern.slf4j.Slf4j;
+import escuelaing.edu.co.truckcar.load_allocation.tracking.TrackingLinkUnavailableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -24,6 +25,17 @@ public class GlobalExceptionHandler {
         error.put("error", "Carga no encontrada");
         error.put("message", ex.getMessage());
         return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
+    }
+
+    /** Enlace público inválido, vencido o de un envío cancelado/entregado: 410 sin detalles de la carga. */
+    @ExceptionHandler(TrackingLinkUnavailableException.class)
+    public ResponseEntity<Map<String, Object>> handleTrackingUnavailable(TrackingLinkUnavailableException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", LocalDateTime.now());
+        error.put("status", HttpStatus.GONE.value());
+        error.put("error", "Seguimiento no disponible");
+        error.put("message", ex.getMessage());
+        return new ResponseEntity<>(error, HttpStatus.GONE);
     }
 
     @ExceptionHandler(InvalidLoadOperationException.class)
