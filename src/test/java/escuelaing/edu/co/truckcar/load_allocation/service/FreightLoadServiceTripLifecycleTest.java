@@ -230,6 +230,37 @@ class FreightLoadServiceTripLifecycleTest {
         assertThat(load.getDeliveredAt()).isEqualTo(offlineDeliveredAt);
     }
 
+    /** Un reloj del teléfono adelantado o atrasado no puede dejar la cronología al revés en el seguimiento público. */
+    @Test
+    void offlineTimesStayBetweenThePreviousMilestoneAndNow() {
+        LocalDateTime assignedAt = LocalDateTime.now().minusHours(2);
+        FreightLoad load = load(LoadStatus.ASSIGNED, AssignmentStatus.ACCEPTED);
+        load.setPublishedAt(assignedAt.minusHours(1));
+        load.setAssignedAt(assignedAt);
+        FreightLoadService service = serviceWith(load);
+
+        // Salida "antes" de la asignación (reloj atrasado): se registra la hora de asignación.
+        service.startTrip(30L, DRIVER, assignedAt.minusHours(5));
+        assertThat(load.getTripStartedAt()).isEqualTo(assignedAt);
+
+        // Entrega "en el futuro" (reloj adelantado): se registra ahora.
+        LocalDateTime before = LocalDateTime.now();
+        service.deliverLoad(30L, DRIVER, pod(), LocalDateTime.now().plusHours(6));
+        assertThat(load.getDeliveredAt()).isBetween(before, LocalDateTime.now());
+        assertThat(load.getDeliveredAt()).isAfterOrEqualTo(load.getTripStartedAt());
+    }
+
+    @Test
+    void reportedTimesInsideTheTimelineAreKept() {
+        LocalDateTime now = LocalDateTime.of(2026, 11, 2, 10, 0);
+        LocalDateTime assigned = now.minusHours(3);
+        assertThat(FreightLoadService.withinTimeline(now.minusHours(1), assigned, now)).isEqualTo(now.minusHours(1));
+        assertThat(FreightLoadService.withinTimeline(now.minusHours(4), assigned, now)).isEqualTo(assigned);
+        assertThat(FreightLoadService.withinTimeline(now.plusMinutes(5), assigned, now)).isEqualTo(now);
+        assertThat(FreightLoadService.withinTimeline(null, assigned, now)).isEqualTo(now);
+        assertThat(FreightLoadService.withinTimeline(now.minusHours(4), null, now)).isEqualTo(now.minusHours(4));
+    }
+
     @Test
     void deliveryWithoutMediaDoesNotWriteTheMediaTable() {
         FreightLoad load = load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED);

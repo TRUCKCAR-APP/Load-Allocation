@@ -386,11 +386,35 @@ public class FreightLoadService implements IFreightLoadService {
         requireAssignedDriver(loadId, authenticatedUserId, "iniciar el viaje de");
         FreightLoad load = requireStatus(loadId, LoadStatus.ASSIGNED, "iniciar el viaje");
         load.setStatus(LoadStatus.IN_TRANSIT);
-        load.setTripStartedAt(startedAt);
+        LocalDateTime assignedOrPublished = load.getAssignedAt() != null ? load.getAssignedAt() : load.getPublishedAt();
+        load.setTripStartedAt(withinTimeline(startedAt, assignedOrPublished, loadId, "salida"));
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "trip.started");
         log.info("Viaje de la carga #{} iniciado por el conductor {}", loadId, authenticatedUserId);
         return mapToResponse(updated);
+    }
+
+    /**
+     * La hora que reporta el teléfono en un lote offline se acota entre el hito anterior y ahora: un reloj adelantado o
+     * atrasado dejaba salidas en el futuro o anteriores a la asignación, y el seguimiento público mostraba la cronología
+     * al revés. Dentro de ese rango se respeta la hora del dispositivo.
+     */
+    static LocalDateTime withinTimeline(LocalDateTime reported, LocalDateTime notBefore, LocalDateTime now) {
+        if (reported == null || reported.isAfter(now)) {
+            return now;
+        }
+        if (notBefore != null && reported.isBefore(notBefore)) {
+            return notBefore.isAfter(now) ? now : notBefore;
+        }
+        return reported;
+    }
+
+    private LocalDateTime withinTimeline(LocalDateTime reported, LocalDateTime notBefore, Long loadId, String milestone) {
+        LocalDateTime accepted = withinTimeline(reported, notBefore, LocalDateTime.now());
+        if (reported != null && !accepted.equals(reported)) {
+            log.warn("Hora de {} de la carga #{} fuera de la cronología ({}); se registra {}", milestone, loadId, reported, accepted);
+        }
+        return accepted;
     }
 
     /** IN_TRANSIT -> DELIVERED: el conductor asignado registra la entrega con su prueba (POD). */
@@ -415,7 +439,7 @@ public class FreightLoadService implements IFreightLoadService {
         requireOwnedKey(loadId, PodMediaKind.SIGNATURE, signature);
         requireOwnedKey(loadId, PodMediaKind.PHOTO, photo);
         load.setStatus(LoadStatus.DELIVERED);
-        load.setDeliveredAt(deliveredAt);
+        load.setDeliveredAt(withinTimeline(deliveredAt, load.getTripStartedAt(), loadId, "entrega"));
         load.setPodReceiverName(pod.getReceiverName().trim());
         load.setPodReceiverDocument(pod.getReceiverDocument());
         load.setPodNotes(pod.getNotes());
