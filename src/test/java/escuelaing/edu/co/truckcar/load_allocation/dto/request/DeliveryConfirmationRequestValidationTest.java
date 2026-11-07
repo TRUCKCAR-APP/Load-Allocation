@@ -25,11 +25,23 @@ class DeliveryConfirmationRequestValidationTest {
         return PodObjectReference.builder().objectKey(key).sha256(sha).contentType(type).sizeBytes(size).build();
     }
 
+    private static final PodObjectReference VALID_SIGNATURE =
+            reference("pod/30/signature-" + SHA + ".png", SHA, "image/png", 2048);
+
     @Test
-    void acceptsDeliveryWithoutEvidenceOrWithValidReferences() {
-        assertThat(validate(null, null)).isEmpty();
-        assertThat(validate(reference("pod/30/signature-" + SHA + ".png", SHA, "image/png", 2048),
+    void acceptsDeliveryWithSignatureAndOptionalPhoto() {
+        assertThat(validate(VALID_SIGNATURE, null)).isEmpty();
+        assertThat(validate(VALID_SIGNATURE,
                 reference("pod/30/photo-" + SHA + ".jpg", SHA, "image/jpeg", 350_000))).isEmpty();
+    }
+
+    @Test
+    void rejectsDeliveryWithoutSignature() {
+        assertThat(validate(null, null))
+                .extracting(ConstraintViolation::getMessage)
+                .containsExactly("La firma de quien recibe es obligatoria para registrar la entrega");
+        assertThat(validate(null, reference("pod/30/photo-" + SHA + ".jpg", SHA, "image/jpeg", 350_000)))
+                .isNotEmpty();
     }
 
     @Test

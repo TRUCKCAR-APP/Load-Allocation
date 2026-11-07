@@ -11,10 +11,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Vence automáticamente las propuestas NOTIFIED sin respuesta dentro de la ventana configurada,
+ * Vence automáticamente las propuestas PROPOSED o NOTIFIED sin respuesta dentro de la ventana configurada,
  * emitiendo assignment.timeout para que el motor de asignación busque otro candidato.
  */
 @Slf4j
@@ -31,8 +32,11 @@ public class AssignmentTimeoutScheduler {
     @Scheduled(fixedDelayString = "${truckcar.assignment.timeout-check-interval-ms:30000}")
     public void expireUnansweredAssignments() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(responseTimeoutMinutes);
-        List<FreightLoad> expired = repository
-                .findByAssignmentStatusAndAssignmentStatusChangedAtBefore(AssignmentStatus.NOTIFIED, cutoff);
+        // PROPOSED incluido: una propuesta que Notifications nunca confirmó también vence y se reasigna sola.
+        List<FreightLoad> expired = new ArrayList<>(repository
+                .findByAssignmentStatusAndAssignmentStatusChangedAtBefore(AssignmentStatus.NOTIFIED, cutoff));
+        expired.addAll(repository
+                .findByAssignmentStatusAndAssignmentStatusChangedAtBefore(AssignmentStatus.PROPOSED, cutoff));
         for (FreightLoad load : expired) {
             try {
                 freightLoadService.expireIfUnanswered(load.getId(), cutoff);

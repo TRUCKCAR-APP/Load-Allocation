@@ -13,8 +13,14 @@
 #   6. Verifica que la carga sea visible para el frontend del conductor.
 #   7. (Opcional, ACCEPT=1) verifica que otro usuario no pueda aceptarla (403), la acepta como el
 #      conductor asignado y planea la ruta con Route-AI.
-#   8. (ACCEPT=1) inicia el viaje (IN_TRANSIT), registra la entrega con firma y foto (DELIVERED) y consulta el POD.
+#   8. (ACCEPT=1) inicia el viaje (IN_TRANSIT), genera el enlace público de seguimiento y lo abre sin sesión, sube la
+#      firma con URL prefirmada, registra la entrega (DELIVERED), comprueba que la firma quedó asociada (SHA-256) y
+#      que el destinatario ve el envío entregado.
 #   9. (ACCEPT=1) publica otra carga y verifica la cancelación: 403 para CONDUCTOR, 200 para COORDINADOR.
+#  10. api-gateway: 401/400/404 con JSON y mensaje claro, y WebSocket con ticket de un solo uso (sin JWT en la URL).
+#
+# La propuesta que Notifications no confirme vence sola (truckcar.assignment.response-timeout-minutes) y vuelve al
+# motor; el script solo la notifica a mano en la sección 5 para no esperar ese plazo.
 #
 # Uso (desde la raíz del repo Load-Allocation):
 #        PASSWORD=... bash scripts/e2e/e2e-asignacion.sh            # deja la carga en NOTIFIED para aceptarla en el frontend
@@ -97,6 +103,44 @@ wait_assignment() {   # wait_assignment ESTADO1|ESTADO2 SEGUNDOS
     return 1
 }
 
+# Firma PNG de 1x1 px: suficiente para validar el contrato del POD de punta a punta.
+SIGNATURE_PNG_B64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+# upload_signature LOAD_ID -> sube la firma con la URL prefirmada (como la PWA) y deja su referencia JSON en
+# $SIGNATURE_REF y su SHA-256 en $SIGNATURE_SHA. Devuelve 1 si algún paso falla.
+upload_signature() {
+    local load_id="$1" file="$TMP/signature.png"
+    printf '%s' "$SIGNATURE_PNG_B64" | base64 -d > "$file"
+    local size sha
+    size="$(wc -c < "$file" | tr -d ' ')"
+    sha="$(sha256sum "$file" | cut -d' ' -f1)"
+    call POST "/loads/$load_id/proof-of-delivery/upload-urls" "$DRIVER_TOKEN" \
+        "{\"files\":[{\"kind\":\"SIGNATURE\",\"contentType\":\"image/png\",\"sizeBytes\":$size,\"sha256\":\"$sha\"}]}"
+    [ "$CODE" = "200" ] || return 1
+    local url key
+    url="$(field uploadUrl)"; key="$(field objectKey)"
+    # Cabeceras firmadas (Content-Type, x-amz-checksum-sha256...): deben enviarse tal cual en el PUT.
+    local headers=()
+    while IFS= read -r pair; do
+        [ -z "$pair" ] && continue
+        headers+=(-H "$(printf '%s' "$pair" | sed -E 's/^"([^"]+)":"([^"]*)"$/\1: \2/')")
+    done < <(printf '%s' "$BODY" | grep -oE '"headers":\{[^}]*\}' | head -1 | sed -E 's/^"headers":\{//; s/\}$//' \
+                | grep -oE '"[^"]+":"[^"]*"')
+    local put_code
+    put_code="$(curl -s -o "$TMP/put" -w '%{http_code}' -X PUT "${headers[@]}" --data-binary "@$file" "$url")"
+    printf '       %-6s %-52s -> HTTP %s\n' PUT "(almacenamiento) $key" "$put_code"
+    [ "$put_code" = "200" ] || return 1
+    SIGNATURE_SHA="$sha"
+    SIGNATURE_REF="{\"objectKey\":\"$key\",\"sha256\":\"$sha\",\"contentType\":\"image/png\",\"sizeBytes\":$size}"
+}
+
+# ws_handshake QUERY -> código HTTP del upgrade a WebSocket en /ws-telemetry (101 = conexión abierta).
+ws_handshake() {
+    curl -s -o /dev/null -w '%{http_code}' --http1.1 --max-time 3 "$GATEWAY/ws-telemetry$1" \
+        -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+        -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: ${WS_ORIGIN:-http://localhost:5500}" || true
+}
+
 driver_state() {   # driver_state ID PLACA STATUS HORAS PESO LAT LON MODELO NOMBRE
     cat <<JSON
 {"driverId":"$1","driverName":"$9","licenseCategory":"C3","rating":4.9,"totalTrips":210,
@@ -154,8 +198,9 @@ for round in 1 2 3 4 5 6; do
             AVAILABLE/PROPOSED) call PATCH "/loads/$id/assignment/timeout" "$COORD_TOKEN" ;;
             ASSIGNED/*)         call PATCH "/loads/$id/cancel" "$COORD_TOKEN" \
                                     '{"reason":"Limpieza automatica antes de la prueba E2E"}' ;;
-            IN_TRANSIT/*)       call PATCH "/loads/$id/trip/deliver" "$DRIVER_TOKEN" \
-                                    '{"receiverName":"Cierre automatico E2E","notes":"Viaje de una prueba anterior cerrado por el script E2E"}' ;;
+            IN_TRANSIT/*)       # La entrega exige firma: se sube una antes de cerrar el viaje.
+                                upload_signature "$id" && call PATCH "/loads/$id/trip/deliver" "$DRIVER_TOKEN" \
+                                    "{\"receiverName\":\"Cierre automatico E2E\",\"notes\":\"Viaje de una prueba anterior cerrado por el script E2E\",\"signature\":$SIGNATURE_REF}" ;;
         esac
     done <<< "$PENDING"
     sleep 3
@@ -284,28 +329,67 @@ if [ "$ACCEPT" = "1" ]; then
     expect_eq "$(field status)" "IN_TRANSIT" "  status"
     call PATCH "/loads/$LOAD_ID/cancel" "$COORD_TOKEN" '{"reason":"Prueba de cancelacion en transito"}'
     expect_code 409 "una carga en tránsito no se puede cancelar"
+
+    section "8b. Seguimiento público para el destinatario"
+    call POST "/loads/$LOAD_ID/public-tracking-link" "$DRIVER_TOKEN"
+    expect_code 403 "un CONDUCTOR no comparte el seguimiento"
+    call POST "/loads/$LOAD_ID/public-tracking-link" "$COORD_TOKEN"
+    expect_code 201 "POST /loads/$LOAD_ID/public-tracking-link (torre de control)"
+    TRACK_TOKEN="$(field token)"
+    info "enlace para el destinatario: $(field url)"
+    call GET "/loads/public-tracking/$TRACK_TOKEN" ""
+    expect_code 200 "el destinatario abre el seguimiento sin iniciar sesión"
+    expect_eq "$(field status)" "IN_TRANSIT" "  estado visible para el destinatario"
+    expect_eq "$(field reference)" "CARGA-$LOAD_ID" "  referencia del envío"
+    printf '%s' "$BODY" | grep -q 'TDK-410' && fail "  la placa completa no debe publicarse" || pass "  placa enmascarada"
+    printf '%s' "$BODY" | grep -q "$DRIVER_ID" && fail "  el id del conductor no debe publicarse" || pass "  sin datos del conductor"
+    call GET "/loads/public-tracking/${TRACK_TOKEN}x" ""
+    expect_code 410 "un enlace alterado no muestra el envío"
+
+    section "8c. Entrega con evidencia digital"
     call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" '{"receiverName":"","notes":"x"}'
     expect_code 400 "la entrega exige el nombre de quien recibe"
-    # Firma SVG con script (<svg onload=alert(1)>): se rechaza.
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" '{"receiverName":"Jefe de Bodega Cali"}'
+    expect_code 400 "la entrega exige la firma de quien recibe"
+    # Formato antiguo (imagen en Base64 dentro del JSON, aquí un SVG con script): ya no se acepta.
     call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
         '{"receiverName":"Jefe de Bodega Cali","signatureDataUrl":"data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIj48L3N2Zz4="}'
-    expect_code 400 "una firma SVG con scripts se rechaza"
-    # Firma PNG de 1x1 px y foto por URL: suficiente para validar el contrato del POD.
-    SIGNATURE='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
-    PHOTO_URL='https://evidencias.truckcar.co/e2e/entrega.jpg'
+    expect_code 400 "una firma en Base64 / SVG se rechaza"
+    # Referencia a una firma que nunca se subió: 422.
+    FAKE_SHA="$(printf 'no-subida-%s' "$RUN_ID" | sha256sum | cut -d' ' -f1)"
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
+        "{\"receiverName\":\"Jefe de Bodega Cali\",\"signature\":{\"objectKey\":\"pod/$LOAD_ID/signature-$FAKE_SHA.png\",
+          \"sha256\":\"$FAKE_SHA\",\"contentType\":\"image/png\",\"sizeBytes\":68}}"
+    expect_code 422 "una firma que no está en el almacenamiento se rechaza"
+    call POST "/loads/$LOAD_ID/proof-of-delivery/upload-urls" "$COORD_TOKEN" \
+        '{"files":[{"kind":"SIGNATURE","contentType":"image/png","sizeBytes":68,"sha256":"'"$FAKE_SHA"'"}]}'
+    expect_code 403 "solo el conductor asignado pide URLs de subida"
+    if upload_signature "$LOAD_ID"; then pass "firma subida al almacenamiento con URL prefirmada"; else fail "no se pudo subir la firma"; fi
     call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
         "{\"receiverName\":\"Jefe de Bodega Cali\",\"receiverDocument\":\"CC 1020304050\",\"notes\":\"Sin novedades\",
-          \"signatureDataUrl\":\"$SIGNATURE\",\"photoUrl\":\"$PHOTO_URL\"}"
+          \"signature\":$SIGNATURE_REF}"
     expect_code 200 "PATCH /loads/$LOAD_ID/trip/deliver"
     expect_eq "$(field status)" "DELIVERED" "  status"
     expect_eq "$(field podReceiverName)" "Jefe de Bodega Cali" "  prueba de entrega: quien recibe"
     expect_eq "$(field podHasSignature)" "true" "  prueba de entrega con firma"
+    call PATCH "/loads/$LOAD_ID/trip/deliver" "$DRIVER_TOKEN" \
+        "{\"receiverName\":\"Jefe de Bodega Cali\",\"signature\":$SIGNATURE_REF}"
+    expect_code 409 "una carga entregada no se entrega dos veces"
     call GET "/loads/$LOAD_ID/proof-of-delivery" "$COORD_TOKEN"
     expect_code 200 "GET /loads/$LOAD_ID/proof-of-delivery (torre de control)"
-    expect_eq "$(field signatureDataUrl)" "$SIGNATURE" "  firma almacenada"
-    expect_eq "$(field photoUrl)" "$PHOTO_URL" "  foto almacenada"
+    expect_eq "$(field signatureSha256)" "$SIGNATURE_SHA" "  firma asociada a la entrega"
+    SIGNATURE_URL="$(field signatureUrl)"
+    if [ -n "$SIGNATURE_URL" ] && [ "$SIGNATURE_URL" != "null" ] \
+        && [ "$(curl -s "$SIGNATURE_URL" | sha256sum | cut -d' ' -f1)" = "$SIGNATURE_SHA" ]; then
+        pass "  la firma descargada coincide con su SHA-256"
+    else
+        fail "  no se pudo descargar la firma almacenada o su contenido no coincide"
+    fi
     call GET "/loads/$LOAD_ID/proof-of-delivery" "$DRIVER_TOKEN"
     expect_code 200 "el conductor ve su prueba de entrega"
+    call GET "/loads/public-tracking/$TRACK_TOKEN" ""
+    expect_code 200 "el destinatario ve el envío entregado"
+    expect_eq "$(field status)" "DELIVERED" "  estado visible para el destinatario"
     call GET "/loads?status=DELIVERED" "$DRIVER_TOKEN"
     expect_code 403 "un CONDUCTOR no lista todas las cargas"
     call GET "/loads?status=DELIVERED" "$COORD_TOKEN"
@@ -327,6 +411,49 @@ if [ "$ACCEPT" = "1" ]; then
     expect_eq "$(field status)" "CANCELLED" "  status"
     call PATCH "/loads/$CANCEL_ID/assignment/accept" "$DRIVER_TOKEN"
     expect_code "403 409" "la carga cancelada ya no admite aceptación"
+fi
+
+# ----------------------------------------------------------------- 10. api-gateway
+section "10. api-gateway: errores normalizados y acceso"
+expect_json_error() {   # expect_json_error ETIQUETA -> el cuerpo trae status, error y message
+    if printf '%s' "$BODY" | grep -q '"status":' && printf '%s' "$BODY" | grep -q '"message":"[^"]\+'; then
+        pass "  $1: JSON con mensaje ($(field message | head -c 90))"
+    else
+        fail "  $1: el error no trae un mensaje claro: $(printf '%s' "$BODY" | head -c 200)"
+    fi
+}
+call GET "/loads" ""
+expect_code 401 "sin token: 401" && expect_json_error "sin token"
+call GET "/loads" "token.invalido.firma"
+expect_code 401 "token inválido: 401" && expect_json_error "token inválido"
+call GET "/ruta-que-no-existe" "$COORD_TOKEN"
+expect_code 404 "ruta inexistente: 404" && expect_json_error "ruta inexistente"
+call POST "/loads" "$COORD_TOKEN" '{"cargoDescription":'
+expect_code 400 "JSON mal formado: 400" && expect_json_error "JSON mal formado"
+call POST "/loads" "$COORD_TOKEN" "{\"generatorCompanyName\":\"Acerias E2E\",\"cargoDescription\":\"$(printf 'x%.0s' $(seq 1 300))\",
+  \"weightTons\":10,\"requiredTruckType\":\"TRACTOMULA_3S3\",\"originCity\":\"Bogota\",\"originDepartment\":\"Cundinamarca\",
+  \"originLatitude\":400,\"originLongitude\":-74.082,\"destinationCity\":\"Tunja\",\"destinationDepartment\":\"Boyaca\",
+  \"destinationLatitude\":5.535,\"destinationLongitude\":-73.367,\"offeredBudget\":1200000}"
+expect_code 400 "texto demasiado largo y latitud fuera de rango: 400 (antes 500)" && expect_json_error "validación"
+call GET "/loads/no-es-un-numero" "$COORD_TOKEN"
+expect_code 400 "id con tipo incorrecto: 400" && expect_json_error "tipo incorrecto"
+call PATCH "/loads/999999999/assignment/accept" "$DRIVER_TOKEN"
+expect_code 404 "carga inexistente: 404" && expect_json_error "carga inexistente"
+
+# WebSocket de telemetría: solo con ticket de un solo uso; nunca con el JWT en la URL.
+WS_CODE="$(ws_handshake "")"
+expect_eq "$WS_CODE" "401" "WebSocket sin ticket"
+WS_CODE="$(ws_handshake "?access_token=$DRIVER_TOKEN")"
+expect_eq "$WS_CODE" "401" "WebSocket con el JWT en la URL (no autentica)"
+call POST "/telemetry/ws-ticket" ""
+expect_code 401 "ticket sin token: 401"
+call POST "/telemetry/ws-ticket" "$DRIVER_TOKEN"
+if expect_code 200 "POST /telemetry/ws-ticket"; then
+    WS_TICKET="$(field ticket)"
+    WS_CODE="$(ws_handshake "?ticket=$WS_TICKET")"
+    expect_eq "$WS_CODE" "101" "WebSocket abierto con el ticket"
+    WS_CODE="$(ws_handshake "?ticket=$WS_TICKET")"
+    expect_eq "$WS_CODE" "401" "el mismo ticket no sirve dos veces"
 fi
 
 # ----------------------------------------------------------------- resumen
