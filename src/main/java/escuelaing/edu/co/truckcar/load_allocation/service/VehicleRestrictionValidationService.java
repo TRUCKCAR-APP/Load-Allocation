@@ -9,6 +9,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -33,6 +34,7 @@ public class VehicleRestrictionValidationService {
     private final String fleetsDriversUrl;
     private final String routingRestrictionsUrl;
 
+    @Autowired
     public VehicleRestrictionValidationService(
             RestClient.Builder builder,
             @Value("${truckcar.services.fleets-drivers-url:${truckcar.tracking.fleets-drivers-url:http://localhost:8081}}") String fleetsDriversUrl,
