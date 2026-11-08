@@ -19,8 +19,8 @@ import escuelaing.edu.co.truckcar.load_allocation.model.ProofOfDeliveryMedia;
 import escuelaing.edu.co.truckcar.load_allocation.model.TruckTypeRequired;
 import escuelaing.edu.co.truckcar.load_allocation.repository.FreightLoadRepository;
 import escuelaing.edu.co.truckcar.load_allocation.repository.ProofOfDeliveryMediaRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,7 +34,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class FreightLoadService implements IFreightLoadService {
 
     private static final Set<AssignmentStatus> REASSIGNABLE =
@@ -48,6 +47,22 @@ public class FreightLoadService implements IFreightLoadService {
     private final FreightLoadRepository repository;
     private final OutboxEventService outboxEventService;
     private final ProofOfDeliveryMediaRepository podMediaRepository;
+    private final VehicleRestrictionValidationService restrictionValidator;
+
+    public FreightLoadService(FreightLoadRepository repository, OutboxEventService outboxEventService,
+                              ProofOfDeliveryMediaRepository podMediaRepository) {
+        this(repository, outboxEventService, podMediaRepository, null);
+    }
+
+    @Autowired
+    public FreightLoadService(FreightLoadRepository repository, OutboxEventService outboxEventService,
+                              ProofOfDeliveryMediaRepository podMediaRepository,
+                              @Autowired(required = false) VehicleRestrictionValidationService restrictionValidator) {
+        this.repository = repository;
+        this.outboxEventService = outboxEventService;
+        this.podMediaRepository = podMediaRepository;
+        this.restrictionValidator = restrictionValidator;
+    }
 
     @Value("${truckcar.assignment.max-attempts:5}")
     private int maxAssignmentAttempts = 5;
@@ -270,6 +285,11 @@ public class FreightLoadService implements IFreightLoadService {
                     throw new InvalidLoadOperationException("Ya tiene la carga #" + other.getId() + " en status "
                             + other.getStatus() + "; termínela antes de aceptar la carga #" + loadId);
                 });
+        FreightLoad loadCandidate = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        if (restrictionValidator != null) {
+            restrictionValidator.validateCompatibility(loadCandidate, authenticatedUserId);
+        }
         FreightLoad load = transition(loadId, AssignmentStatus.ACCEPTED, AssignmentStatus.NOTIFIED);
         load.setStatus(LoadStatus.ASSIGNED);
         load.setAssignedAt(LocalDateTime.now());
@@ -385,6 +405,11 @@ public class FreightLoadService implements IFreightLoadService {
     public FreightLoadResponse startTrip(Long loadId, String authenticatedUserId, LocalDateTime startedAt) {
         requireAssignedDriver(loadId, authenticatedUserId, "iniciar el viaje de");
         FreightLoad load = requireStatus(loadId, LoadStatus.ASSIGNED, "iniciar el viaje");
+
+        if (restrictionValidator != null) {
+            restrictionValidator.validateCompatibility(load, authenticatedUserId);
+        }
+
         load.setStatus(LoadStatus.IN_TRANSIT);
         LocalDateTime assignedOrPublished = load.getAssignedAt() != null ? load.getAssignedAt() : load.getPublishedAt();
         load.setTripStartedAt(withinTimeline(startedAt, assignedOrPublished, loadId, "salida"));
