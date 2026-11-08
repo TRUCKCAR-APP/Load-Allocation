@@ -15,8 +15,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.text.Normalizer;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -61,6 +63,7 @@ public class VehicleRestrictionValidationService {
     public static class VehicleState {
         private String driverId;
         private String vehiclePlate;
+        private String vehicleType;
         private Double maxHeightMeters;
         private Double tareWeightTons;
         private Double grossWeightTons;
@@ -87,31 +90,70 @@ public class VehicleRestrictionValidationService {
     public void validateCompatibility(FreightLoad load, String driverId) {
         VehicleState vehicle = fetchVehicleState(driverId, load.getAssignedVehiclePlate());
 
-        String plate = (vehicle != null && vehicle.getVehiclePlate() != null && !vehicle.getVehiclePlate().isBlank())
+        // Principio de seguridad vial: bloqueo cerrado (fail-closed)
+        if (vehicle == null) {
+            throw new RoutingServiceUnavailableException(
+                    "El servicio de flota y conductores (fleets-drivers) no respondió para el conductor "
+                            + driverId + "; por seguridad vial se bloquea el inicio del viaje hasta verificar gálibo y peso.", null);
+        }
+
+        if (vehicle.getMaxHeightMeters() == null || vehicle.getMaxHeightMeters() <= 0) {
+            throw new RouteIncompatibleException(
+                    "El vehículo asignado no tiene registrada su altura máxima en fleets-drivers; se requiere ficha técnica completa antes de viajar.",
+                    List.of("DATOS_VEHICULO_INCOMPLETOS: falta altura máxima (gálibo) del camión en fleets-drivers"));
+        }
+
+        String plate = (vehicle.getVehiclePlate() != null && !vehicle.getVehiclePlate().isBlank())
                 ? vehicle.getVehiclePlate()
                 : (load.getAssignedVehiclePlate() != null ? load.getAssignedVehiclePlate() : "SIN-PLACA");
 
-        double heightMeters = (vehicle != null && vehicle.getMaxHeightMeters() != null)
-                ? vehicle.getMaxHeightMeters()
-                : 4.10;
+        double heightMeters = vehicle.getMaxHeightMeters();
 
-        double tare = (vehicle != null && vehicle.getTareWeightTons() != null)
+        double tare = (vehicle.getTareWeightTons() != null && vehicle.getTareWeightTons() > 0)
                 ? vehicle.getTareWeightTons()
                 : 0.0;
         double cargo = load.getWeightTons() != null ? load.getWeightTons() : 0.0;
         double grossWeight = tare + cargo;
-        if (grossWeight == 0.0 && vehicle != null && vehicle.getGrossWeightTons() != null) {
+        if (grossWeight == 0.0 && vehicle.getGrossWeightTons() != null) {
             grossWeight = vehicle.getGrossWeightTons();
         }
         if (grossWeight == 0.0) {
             grossWeight = cargo > 0 ? cargo : 10.0;
         }
 
-        Double axleWeight = grossWeight > 0 ? (grossWeight / 3.0) : null;
+        // Estimación de ejes a partir de la tipología del vehículo o tipo requerido
+        int axles = estimateAxles(
+                load.getRequiredTruckType() != null ? load.getRequiredTruckType().name() : null,
+                vehicle.getVehicleType());
+        Double axleWeight = grossWeight > 0 ? (grossWeight / (double) axles) : null;
 
         String corridor = resolveCorridor(load);
 
         checkRouteCompatibility(plate, corridor, grossWeight, heightMeters, axleWeight, load.getId());
+    }
+
+    /**
+     * Estimación de ejes a partir de la tipología vehicular colombiana.
+     * <p>
+     * Limitación técnica documentada: {@code fleets-drivers} no persiste pesaje por eje individual ni número de ejes.
+     * Se deduce la distribución estimada de carga dividiendo el peso bruto total entre el número típico de ejes:
+     * <ul>
+     *   <li>Tractomulas 3S3: 6 ejes</li>
+     *   <li>Tractomulas 3S2: 5 ejes</li>
+     *   <li>Cuatro manos (C4): 4 ejes</li>
+     *   <li>Doble troque (C3): 3 ejes</li>
+     *   <li>Camión sencillo (C2): 2 ejes</li>
+     * </ul>
+     */
+    static int estimateAxles(String requiredTruckType, String vehicleType) {
+        String type = (vehicleType != null && !vehicleType.isBlank()) ? vehicleType.toUpperCase(Locale.ROOT)
+                : (requiredTruckType != null ? requiredTruckType.toUpperCase(Locale.ROOT) : "");
+        if (type.contains("3S3") || type.contains("C3S3")) return 6;
+        if (type.contains("3S2") || type.contains("C3S2")) return 5;
+        if (type.contains("CUATRO_MANOS") || type.contains("C4")) return 4;
+        if (type.contains("DOBLE_TROQUE") || type.contains("C3")) return 3;
+        if (type.contains("SENCILLO") || type.contains("C2")) return 2;
+        return 3;
     }
 
     private VehicleState fetchVehicleState(String driverId, String fallbackPlate) {
@@ -122,8 +164,10 @@ public class VehicleRestrictionValidationService {
                         .retrieve()
                         .body(VehicleState.class);
             } catch (Exception e) {
-                log.warn("No se pudo consultar estado del conductor {} en fleets-drivers ({}); se usará información disponible",
-                        driverId, e.getMessage());
+                log.error("Fallo al consultar fleets-drivers para el conductor {}: {}", driverId, e.getMessage());
+                throw new RoutingServiceUnavailableException(
+                        "El servicio fleets-drivers no respondió para el conductor " + driverId
+                                + "; por seguridad vial se bloquea la operación hasta verificar gálibo y peso.", e);
             }
         }
         return null;
@@ -170,8 +214,8 @@ public class VehicleRestrictionValidationService {
     }
 
     public static String resolveCorridor(FreightLoad load) {
-        String origin = load.getOriginCity() != null ? load.getOriginCity().trim() : "";
-        String dest = load.getDestinationCity() != null ? load.getDestinationCity().trim() : "";
+        String origin = normalizeCity(load.getOriginCity());
+        String dest = normalizeCity(load.getDestinationCity());
         if (!origin.isEmpty() && !dest.isEmpty()) {
             return origin + "-" + dest;
         } else if (!origin.isEmpty()) {
@@ -180,6 +224,19 @@ public class VehicleRestrictionValidationService {
             return dest;
         }
         return "CORREDOR-NACIONAL";
+    }
+
+    public static String normalizeCity(String city) {
+        if (city == null || city.isBlank()) {
+            return "";
+        }
+        String withoutAccents = Normalizer.normalize(city, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+        return withoutAccents.trim()
+                .replaceAll("(?i)\\s*d\\.c\\.", "")
+                .replaceAll("(?i)\\s*distrito capital", "")
+                .replaceAll("\\s+", " ")
+                .toUpperCase(Locale.ROOT);
     }
 }
 

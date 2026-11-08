@@ -135,32 +135,46 @@ class VehicleRestrictionValidationServiceTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Escenario 4: fleets-drivers no responde → usa valores por defecto y aun valida
+    // Escenario 4: fleets-drivers no responde → Fail-closed: RoutingServiceUnavailableException
     // ─────────────────────────────────────────────────────────────────────────
     @Test
-    void whenFleetsDriversIsDown_thenFallbackValuesAreUsedAndValidationStillRuns() {
+    void whenFleetsDriversIsDown_thenRoutingServiceUnavailableExceptionIsThrown() {
         // fleets-drivers falla
         mockServer.expect(requestTo(FLEETS_URL + "/api/v1/fleets-drivers/drivers/D4"))
                 .andRespond(withServerError());
 
-        // routing-restrictions confirma que pasa (con los valores por defecto)
-        String compatJson = """
-                {"vehiclePlate":"DEF-789","roadCorridor":"Bogotá-Tunja",
-                 "isPassable":true,"blockingReasons":[],"warnings":["Dato estimado: peso no confirmado"]}
-                """;
-        mockServer.expect(requestTo(RESTRICTIONS_URL + "/api/v1/restrictions/validate-compatibility"))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withSuccess(compatJson, MediaType.APPLICATION_JSON));
-
         FreightLoad load = buildLoad("D4", "DEF-789", "Bogotá", "Tunja", 10.0);
 
-        // No debe lanzar excepción: el error de fleets-drivers se absorbe con un warn y la validación continúa
-        service.validateCompatibility(load, "D4");
+        assertThatThrownBy(() -> service.validateCompatibility(load, "D4"))
+                .isInstanceOf(RoutingServiceUnavailableException.class)
+                .hasMessageContaining("fleets-drivers");
         mockServer.verify();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Escenario 5: resolveCorridor con diversas combinaciones
+    // Escenario 5: vehículo sin altura en fleets-drivers → RouteIncompatibleException
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void whenVehicleHeightIsMissing_thenRouteIncompatibleExceptionIsThrown() {
+        String vehicleJson = """
+                {"driverId":"D5","vehiclePlate":"INCOMP-1",
+                 "maxHeightMeters":null,"tareWeightTons":8.0,
+                 "grossWeightTons":28.0,"maxPayloadTons":20.0}
+                """;
+        mockServer.expect(requestTo(FLEETS_URL + "/api/v1/fleets-drivers/drivers/D5"))
+                .andRespond(withSuccess(vehicleJson, MediaType.APPLICATION_JSON));
+
+        FreightLoad load = buildLoad("D5", "INCOMP-1", "Bogotá", "Tunja", 10.0);
+
+        assertThatThrownBy(() -> service.validateCompatibility(load, "D5"))
+                .isInstanceOf(RouteIncompatibleException.class)
+                .satisfies(ex -> assertThat(((RouteIncompatibleException) ex).getBlockingReasons())
+                        .anyMatch(r -> r.contains("DATOS_VEHICULO_INCOMPLETOS")));
+        mockServer.verify();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Escenario 6: resolveCorridor con diversas combinaciones y normalización
     // ─────────────────────────────────────────────────────────────────────────
     @Test
     void resolveCorridor_withNullCities_returnsFallback() {
@@ -169,15 +183,21 @@ class VehicleRestrictionValidationServiceTest {
     }
 
     @Test
-    void resolveCorridor_withOnlyOrigin_returnsOrigin() {
-        FreightLoad load = FreightLoad.builder().originCity("Bogotá").destinationCity(null).build();
-        assertThat(VehicleRestrictionValidationService.resolveCorridor(load)).isEqualTo("Bogotá");
+    void resolveCorridor_withOnlyOrigin_returnsOriginNormalized() {
+        FreightLoad load = FreightLoad.builder().originCity("Bogotá D.C.").destinationCity(null).build();
+        assertThat(VehicleRestrictionValidationService.resolveCorridor(load)).isEqualTo("BOGOTA");
+    }
+
+    @Test
+    void resolveCorridor_withAccentsAndDc_normalizesCanonically() {
+        FreightLoad load = FreightLoad.builder().originCity("Bogotá D.C.").destinationCity("Medellín").build();
+        assertThat(VehicleRestrictionValidationService.resolveCorridor(load)).isEqualTo("BOGOTA-MEDELLIN");
     }
 
     @Test
     void resolveCorridor_withBothCities_returnsDashSeparated() {
         FreightLoad load = FreightLoad.builder().originCity("Cali").destinationCity("Bucaramanga").build();
-        assertThat(VehicleRestrictionValidationService.resolveCorridor(load)).isEqualTo("Cali-Bucaramanga");
+        assertThat(VehicleRestrictionValidationService.resolveCorridor(load)).isEqualTo("CALI-BUCARAMANGA");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
