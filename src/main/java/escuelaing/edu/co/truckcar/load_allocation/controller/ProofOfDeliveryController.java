@@ -39,7 +39,7 @@ public class ProofOfDeliveryController {
             @PathVariable Long loadId,
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
             @Valid @RequestBody DeliveryConfirmationRequest request) {
-        proofOfDeliveryService.verifyEvidence(loadId, request);
+        proofOfDeliveryService.verifyEvidence(loadId, authenticatedUserId, request);
         return ResponseEntity.ok(service.deliverLoad(loadId, authenticatedUserId, request));
     }
 

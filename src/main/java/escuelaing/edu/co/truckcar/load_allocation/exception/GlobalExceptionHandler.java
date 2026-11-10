@@ -2,6 +2,9 @@ package escuelaing.edu.co.truckcar.load_allocation.exception;
 
 import lombok.extern.slf4j.Slf4j;
 import escuelaing.edu.co.truckcar.load_allocation.tracking.TrackingLinkUnavailableException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import software.amazon.awssdk.core.exception.SdkException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -85,6 +88,9 @@ public class GlobalExceptionHandler {
         error.put("timestamp", LocalDateTime.now());
         error.put("status", HttpStatus.BAD_REQUEST.value());
         error.put("error", "Validación de datos fallida");
+        // message como en el resto de errores: el cliente siempre tiene un texto que mostrar.
+        error.put("message", fieldErrors.isEmpty() ? "La solicitud tiene datos inválidos"
+                : String.join("; ", new java.util.TreeMap<>(fieldErrors).values()));
         error.put("details", fieldErrors);
         return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
     }
@@ -110,6 +116,33 @@ public class GlobalExceptionHandler {
         body.put("error", error);
         body.put("message", message);
         return new ResponseEntity<>(body, status);
+    }
+
+    /**
+     * Dos operaciones simultáneas sobre la misma carga (p. ej. el conductor acepta justo cuando vence la propuesta):
+     * gana la primera y la otra recibe 409 para que el cliente vuelva a consultar, en lugar de un 500.
+     */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, Object>> handleConcurrentChange(ObjectOptimisticLockingFailureException ex) {
+        log.info("Cambio concurrente sobre una carga: {}", ex.getMessage());
+        return clientError(HttpStatus.CONFLICT, "Operación inválida sobre la carga",
+                "La carga cambió mientras se procesaba la solicitud; consulte su estado e intente de nuevo");
+    }
+
+    /** Un dato que la base rechaza (duplicado, demasiado largo...) es un conflicto con la solicitud, no un fallo interno. */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.warn("Datos rechazados por la base: {}", ex.getMostSpecificCause().getMessage());
+        return clientError(HttpStatus.CONFLICT, "Datos inválidos",
+                "Los datos enviados no se pudieron guardar; revise la longitud y el formato de los campos");
+    }
+
+    /** Almacenamiento de evidencias (S3) caído o sin permisos: 503 para que la PWA reintente la entrega. */
+    @ExceptionHandler(SdkException.class)
+    public ResponseEntity<Map<String, Object>> handleStorageUnavailable(SdkException ex) {
+        log.error("Almacenamiento de evidencias no disponible: {}", ex.getMessage());
+        return clientError(HttpStatus.SERVICE_UNAVAILABLE, "Servicio no disponible",
+                "El almacenamiento de evidencias no responde; intente de nuevo en unos minutos");
     }
 
     @ExceptionHandler(Exception.class)

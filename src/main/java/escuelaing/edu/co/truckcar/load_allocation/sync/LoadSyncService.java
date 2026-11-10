@@ -105,7 +105,7 @@ public class LoadSyncService {
             case TRIP_STARTED -> loadService.startTrip(loadId, driverId, occurredAt);
             case TRIP_DELIVERED -> {
                 DeliveryConfirmationRequest pod = deliveryOf(event.getPayload());
-                proofOfDeliveryService.verifyEvidence(loadId, pod);
+                proofOfDeliveryService.verifyEvidence(loadId, driverId, pod);
                 loadService.deliverLoad(loadId, driverId, pod, occurredAt);
             }
             default -> throw new IllegalArgumentException("Tipo de evento no admitido por Load-Allocation: "

@@ -167,25 +167,32 @@ public class FreightLoadService implements IFreightLoadService {
         return true;
     }
 
-    /** Vence la propuesta solo si sigue NOTIFIED desde antes del corte (evita expirar una propuesta recién renovada). */
+    /**
+     * Vence la propuesta solo si sigue PROPOSED o NOTIFIED desde antes del corte (evita expirar una propuesta recién
+     * renovada). PROPOSED también vence: si Notifications nunca confirma el aviso, la carga quedaba propuesta para
+     * siempre (el conductor no puede aceptarla y el motor no busca a otro) y el flujo dependía de una intervención
+     * manual (PATCH /assignment/timeout).
+     */
     @Override
     @Transactional
     public boolean expireIfUnanswered(Long loadId, LocalDateTime notifiedBefore) {
         FreightLoad load = repository.findById(loadId).orElse(null);
         if (load == null
                 || !isOpenForAssignment(load)
-                || load.getAssignmentStatus() != AssignmentStatus.NOTIFIED
+                || !PENDING_PROPOSAL.contains(load.getAssignmentStatus())
                 || load.getAssignmentStatusChangedAt() == null
                 || !load.getAssignmentStatusChangedAt().isBefore(notifiedBefore)) {
             return false;
         }
+        boolean wasNotified = load.getAssignmentStatus() == AssignmentStatus.NOTIFIED;
         discardCurrentDriver(load);
         load.setAssignmentStatus(AssignmentStatus.TIMEOUT);
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
         FreightLoad updated = repository.save(load);
         outboxEventService.enqueueLoadEvent(updated, "assignment.timeout");
         AssignmentMetrics.countOutcome("timeout");
-        log.info("Propuesta de la carga #{} venció sin respuesta del conductor {}", loadId, load.getAssignedDriverId());
+        log.info("Propuesta de la carga #{} venció sin respuesta del conductor {} (estaba {})", loadId,
+                load.getAssignedDriverId(), wasNotified ? AssignmentStatus.NOTIFIED : AssignmentStatus.PROPOSED);
         return true;
     }
 
@@ -565,6 +572,17 @@ public class FreightLoadService implements IFreightLoadService {
             throw new InvalidLoadOperationException("La carga #" + loadId + " no admite evidencias de entrega (status="
                     + load.getStatus() + ")");
         }
+    }
+
+    /**
+     * Mismas comprobaciones de identidad y estado que deliverLoad, pero antes de verificar las evidencias en el
+     * almacenamiento: entregar sin haber iniciado el viaje es un 409 claro, no un 422 por la evidencia.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public void requireDriverCanDeliver(Long loadId, String authenticatedUserId) {
+        requireAssignedDriver(loadId, authenticatedUserId, "entregar");
+        requireStatus(loadId, LoadStatus.IN_TRANSIT, "registrar la entrega");
     }
 
     private static void requireOwnedKey(Long loadId, PodMediaKind kind, PodObjectReference reference) {

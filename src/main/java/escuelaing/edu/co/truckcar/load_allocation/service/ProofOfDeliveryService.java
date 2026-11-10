@@ -54,8 +54,18 @@ public class ProofOfDeliveryService {
         return PodUploadUrlResponse.builder().uploads(uploads).build();
     }
 
-    /** Antes de registrar la entrega: cada evidencia referenciada existe y coincide en tamaño, tipo y SHA-256. */
-    public void verifyEvidence(Long loadId, DeliveryConfirmationRequest pod) {
+    /**
+     * Antes de registrar la entrega: primero que quien llama sea el conductor asignado y que la carga esté IN_TRANSIT
+     * (así nadie más provoca lecturas del almacenamiento sobre una carga ajena, y entregar sin iniciar el viaje da 409)
+     * y luego que cada evidencia exista y coincida en tamaño, tipo y SHA-256. La firma es obligatoria
+     * (DeliveryConfirmationRequest); se vuelve a comprobar aquí por si la entrega llega por un camino sin validación
+     * de Bean Validation.
+     */
+    public void verifyEvidence(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod) {
+        freightLoadService.requireDriverCanDeliver(loadId, authenticatedUserId);
+        if (pod.getSignature() == null) {
+            throw new ProofOfDeliveryEvidenceException("La firma de quien recibe es obligatoria para registrar la entrega");
+        }
         verify(loadId, PodMediaKind.SIGNATURE, pod.getSignature());
         verify(loadId, PodMediaKind.PHOTO, pod.getPhoto());
     }
@@ -78,6 +88,12 @@ public class ProofOfDeliveryService {
         if (!kind.ownsKey(loadId, reference.getObjectKey())) {
             throw new ProofOfDeliveryEvidenceException("El archivo " + reference.getObjectKey()
                     + " no es una evidencia " + kind + " de la carga #" + loadId);
+        }
+        // La extensión de la clave la fijó issueUploadUrls a partir del tipo declarado: deben seguir coincidiendo.
+        String expectedSuffix = kind.extensionFor(reference.getContentType()).map(ext -> "." + ext).orElse(null);
+        if (expectedSuffix == null || !reference.getObjectKey().endsWith(expectedSuffix)) {
+            throw new ProofOfDeliveryEvidenceException("El tipo " + reference.getContentType()
+                    + " no corresponde al archivo " + reference.getObjectKey());
         }
         requireWithinLimit(kind, reference.getSizeBytes());
         PodObjectStorage.StoredObject stored = storage.head(reference.getObjectKey())

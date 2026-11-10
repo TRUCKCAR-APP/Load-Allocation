@@ -29,6 +29,8 @@ class ProofOfDeliveryServiceTest {
 
     private static final String SHA = "c".repeat(64);
     private static final String PHOTO_KEY = "pod/30/photo-" + SHA + ".jpg";
+    private static final String SIGNATURE_KEY = "pod/30/signature-" + SHA + ".png";
+    private static final String DRIVER = "driver-ana";
 
     private IFreightLoadService loads;
     private PodObjectStorage storage;
@@ -39,10 +41,19 @@ class ProofOfDeliveryServiceTest {
         loads = mock(IFreightLoadService.class);
         storage = mock(PodObjectStorage.class);
         service = new ProofOfDeliveryService(loads, storage, new S3StorageProperties());
+        // La firma (obligatoria) está subida y su checksum coincide; cada prueba se centra en la foto.
+        when(storage.head(SIGNATURE_KEY)).thenReturn(Optional.of(new PodObjectStorage.StoredObject(500L, "image/png",
+                PodObjectStorage.base64(SHA))));
+    }
+
+    private static PodObjectReference signature() {
+        return PodObjectReference.builder().objectKey(SIGNATURE_KEY).sha256(SHA).contentType("image/png")
+                .sizeBytes(500L).build();
     }
 
     private static DeliveryConfirmationRequest deliveryWithPhoto(long size) {
         return DeliveryConfirmationRequest.builder().receiverName("Bodega")
+                .signature(signature())
                 .photo(PodObjectReference.builder().objectKey(PHOTO_KEY).sha256(SHA).contentType("image/jpeg")
                         .sizeBytes(size).build())
                 .build();
@@ -80,22 +91,22 @@ class ProofOfDeliveryServiceTest {
     @Test
     void deliveryRequiresTheUploadedObjectWithTheDeclaredSizeAndHash() {
         when(storage.head(PHOTO_KEY)).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> service.verifyEvidence(30L, deliveryWithPhoto(1000)))
+        assertThatThrownBy(() -> service.verifyEvidence(30L, DRIVER, deliveryWithPhoto(1000)))
                 .isInstanceOf(ProofOfDeliveryEvidenceException.class)
                 .hasMessageContaining("no se ha subido");
 
         when(storage.head(PHOTO_KEY)).thenReturn(Optional.of(new PodObjectStorage.StoredObject(999L, "image/jpeg", null)));
-        assertThatThrownBy(() -> service.verifyEvidence(30L, deliveryWithPhoto(1000)))
+        assertThatThrownBy(() -> service.verifyEvidence(30L, DRIVER, deliveryWithPhoto(1000)))
                 .hasMessageContaining("999 bytes");
 
         // El almacenamiento no devolvió checksum: se recalcula leyendo el objeto.
         when(storage.head(PHOTO_KEY)).thenReturn(Optional.of(new PodObjectStorage.StoredObject(1000L, "image/jpeg", null)));
         when(storage.sha256Of(PHOTO_KEY)).thenReturn("d".repeat(64));
-        assertThatThrownBy(() -> service.verifyEvidence(30L, deliveryWithPhoto(1000)))
+        assertThatThrownBy(() -> service.verifyEvidence(30L, DRIVER, deliveryWithPhoto(1000)))
                 .hasMessageContaining("no coincide con su SHA-256");
 
         when(storage.sha256Of(PHOTO_KEY)).thenReturn(SHA);
-        service.verifyEvidence(30L, deliveryWithPhoto(1000));
+        service.verifyEvidence(30L, DRIVER, deliveryWithPhoto(1000));
     }
 
     @Test
@@ -103,15 +114,57 @@ class ProofOfDeliveryServiceTest {
         when(storage.head(PHOTO_KEY)).thenReturn(Optional.of(new PodObjectStorage.StoredObject(1000L, "image/jpeg",
                 PodObjectStorage.base64(SHA))));
 
-        service.verifyEvidence(30L, deliveryWithPhoto(1000));
+        service.verifyEvidence(30L, DRIVER, deliveryWithPhoto(1000));
 
         verify(storage, org.mockito.Mockito.never()).sha256Of(eq(PHOTO_KEY));
     }
 
     @Test
     void evidenceOfAnotherLoadIsRejected() {
-        assertThatThrownBy(() -> service.verifyEvidence(31L, deliveryWithPhoto(1000)))
+        assertThatThrownBy(() -> service.verifyEvidence(31L, DRIVER, deliveryWithPhoto(1000)))
                 .isInstanceOf(ProofOfDeliveryEvidenceException.class)
-                .hasMessageContaining("no es una evidencia PHOTO de la carga #31");
+                .hasMessageContaining("de la carga #31");
+    }
+
+    @Test
+    void deliveryWithoutSignatureIsRejected() {
+        DeliveryConfirmationRequest withoutSignature = deliveryWithPhoto(1000);
+        withoutSignature.setSignature(null);
+
+        assertThatThrownBy(() -> service.verifyEvidence(30L, DRIVER, withoutSignature))
+                .isInstanceOf(ProofOfDeliveryEvidenceException.class)
+                .hasMessageContaining("firma de quien recibe es obligatoria");
+    }
+
+    @Test
+    void callerIsCheckedBeforeTouchingTheStorage() {
+        org.mockito.Mockito.doThrow(new escuelaing.edu.co.truckcar.load_allocation.exception.AssignmentAccessDeniedException(
+                        "no es el conductor asignado", false))
+                .when(loads).requireDriverCanDeliver(30L, "intruso");
+
+        assertThatThrownBy(() -> service.verifyEvidence(30L, "intruso", deliveryWithPhoto(1000)))
+                .isInstanceOf(escuelaing.edu.co.truckcar.load_allocation.exception.AssignmentAccessDeniedException.class);
+        org.mockito.Mockito.verifyNoInteractions(storage);
+    }
+
+    @Test
+    void deliveringBeforeStartingTheTripIsAConflictNotAnEvidenceError() {
+        org.mockito.Mockito.doThrow(new escuelaing.edu.co.truckcar.load_allocation.exception.InvalidLoadOperationException(
+                        "Transición inválida para la carga #30: se esperaba IN_TRANSIT pero el estado actual es ASSIGNED"))
+                .when(loads).requireDriverCanDeliver(30L, DRIVER);
+
+        assertThatThrownBy(() -> service.verifyEvidence(30L, DRIVER, deliveryWithPhoto(1000)))
+                .isInstanceOf(escuelaing.edu.co.truckcar.load_allocation.exception.InvalidLoadOperationException.class);
+        org.mockito.Mockito.verifyNoInteractions(storage);
+    }
+
+    @Test
+    void declaredTypeMustMatchTheObjectKey() {
+        DeliveryConfirmationRequest delivery = deliveryWithPhoto(1000);
+        delivery.getPhoto().setContentType("image/png"); // la clave termina en .jpg
+
+        assertThatThrownBy(() -> service.verifyEvidence(30L, DRIVER, delivery))
+                .isInstanceOf(ProofOfDeliveryEvidenceException.class)
+                .hasMessageContaining("no corresponde al archivo");
     }
 }

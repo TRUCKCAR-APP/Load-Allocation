@@ -83,7 +83,7 @@ class LoadSyncServiceTest {
         // loadId del evento no forma parte de la prueba de entrega (deserialización estricta).
         assertThat(pod.getValue().getReceiverName()).isEqualTo("Bodega");
         assertThat(pod.getValue().getSignature().getSha256()).isEqualTo(SHA);
-        verify(proof).verifyEvidence(eq(74L), any());
+        verify(proof).verifyEvidence(eq(74L), eq(DRIVER), any());
     }
 
     @Test
