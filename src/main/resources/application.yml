@@ -62,6 +62,9 @@ truckcar:
     max-ttl: 48h
     after-delivery: 6h
     fleets-drivers-url: ${TRUCKCAR_SERVICES_FLEETS_DRIVERS_URL:http://localhost:8081}
+  services:
+    fleets-drivers-url: ${TRUCKCAR_SERVICES_FLEETS_DRIVERS_URL:http://localhost:8081}
+    routing-restrictions-url: ${TRUCKCAR_SERVICES_ROUTING_RESTRICTIONS_URL:http://routing-restrictions:8084}
   # Evidencias de entrega (POD) en almacenamiento S3. endpoint: dirección interna para HeadObject/PutObject (vacío =
   # Amazon S3). public-endpoint: base con la que se firman las URLs que usa la PWA; en Docker es el nginx del
   # frontend (/pod-media/ en el mismo origen que la app).
