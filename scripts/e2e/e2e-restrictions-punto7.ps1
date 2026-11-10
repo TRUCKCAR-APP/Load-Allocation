@@ -7,8 +7,8 @@
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
-$gateway = "http://localhost:8000/api/v1"
-$password = "TruckCar2026*"
+$gateway = if ($env:GATEWAY_URL) { $env:GATEWAY_URL } else { "http://localhost:8000/api/v1" }
+$password = if ($env:TRUCKCAR_PASSWORD) { $env:TRUCKCAR_PASSWORD } else { "TruckCar2026*" }
 
 function Get-JwtClaim($jwt, $claim) {
     $parts = $jwt.Split('.')

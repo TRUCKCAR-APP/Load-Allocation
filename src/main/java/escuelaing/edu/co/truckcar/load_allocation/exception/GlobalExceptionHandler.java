@@ -57,10 +57,10 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleRoutingUnavailable(RoutingServiceUnavailableException ex) {
         Map<String, Object> error = new HashMap<>();
         error.put("timestamp", LocalDateTime.now());
-        error.put("status", HttpStatus.CONFLICT.value());
+        error.put("status", HttpStatus.SERVICE_UNAVAILABLE.value());
         error.put("error", "Servicio de restricciones viales no disponible");
         error.put("message", ex.getMessage());
-        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
+        return new ResponseEntity<>(error, HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     @ExceptionHandler(InvalidLoadOperationException.class)

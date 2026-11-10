@@ -1,6 +1,7 @@
 package escuelaing.edu.co.truckcar.load_allocation.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonNode;
 import escuelaing.edu.co.truckcar.load_allocation.exception.RouteIncompatibleException;
 import escuelaing.edu.co.truckcar.load_allocation.exception.RoutingServiceUnavailableException;
 import escuelaing.edu.co.truckcar.load_allocation.model.FreightLoad;
@@ -11,12 +12,14 @@ import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -25,36 +28,49 @@ import java.util.Map;
 /**
  * Valida la compatibilidad técnica y vial entre el camión asignado y las restricciones de ruta registradas
  * en ms-routing-restrictions (gálibo, peso bruto, peso por eje y cierres).
+ * <p>
+ * Prioriza la validación sobre la geometría real de la ruta obtenida de OSRM ({@code /validate-route}); si
+ * OSRM no está disponible o la carga no cuenta con coordenadas geográficas, realiza la validación canónica
+ * por nombre de corredor bidireccional ({@code /validate-compatibility}).
  */
 @Slf4j
 @Service
 public class VehicleRestrictionValidationService {
 
+    private static final int MAX_PATH_POINTS = 400;
+
     private final RestClient restClient;
     private final String fleetsDriversUrl;
     private final String routingRestrictionsUrl;
+    private final String osrmUrl;
 
     @Autowired
     public VehicleRestrictionValidationService(
             RestClient.Builder builder,
             @Value("${truckcar.services.fleets-drivers-url:${truckcar.tracking.fleets-drivers-url:http://localhost:8081}}") String fleetsDriversUrl,
-            @Value("${truckcar.services.routing-restrictions-url:http://localhost:8084}") String routingRestrictionsUrl) {
+            @Value("${truckcar.services.routing-restrictions-url:http://localhost:8084}") String routingRestrictionsUrl,
+            @Value("${truckcar.routing.osrm-url:https://router.project-osrm.org}") String osrmUrl) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(3000);
         factory.setReadTimeout(3000);
         this.restClient = builder.requestFactory(factory).build();
-        this.fleetsDriversUrl = fleetsDriversUrl;
-        this.routingRestrictionsUrl = routingRestrictionsUrl;
+        this.fleetsDriversUrl = fleetsDriversUrl != null ? fleetsDriversUrl.replaceAll("/+$", "") : "";
+        this.routingRestrictionsUrl = routingRestrictionsUrl != null ? routingRestrictionsUrl.replaceAll("/+$", "") : "";
+        this.osrmUrl = osrmUrl != null ? osrmUrl.replaceAll("/+$", "") : "";
     }
 
     /**
-     * Constructor para tests: recibe un RestClient ya configurado (p.ej. con MockRestServiceServer)
-     * sin aplicar timeout factory, para que el mock pueda interceptar las peticiones.
+     * Constructor para tests: recibe un RestClient ya configurado sin aplicar timeout factory.
      */
     VehicleRestrictionValidationService(RestClient restClient, String fleetsDriversUrl, String routingRestrictionsUrl) {
+        this(restClient, fleetsDriversUrl, routingRestrictionsUrl, null);
+    }
+
+    VehicleRestrictionValidationService(RestClient restClient, String fleetsDriversUrl, String routingRestrictionsUrl, String osrmUrl) {
         this.restClient = restClient;
-        this.fleetsDriversUrl = fleetsDriversUrl;
-        this.routingRestrictionsUrl = routingRestrictionsUrl;
+        this.fleetsDriversUrl = fleetsDriversUrl != null ? fleetsDriversUrl.replaceAll("/+$", "") : "";
+        this.routingRestrictionsUrl = routingRestrictionsUrl != null ? routingRestrictionsUrl.replaceAll("/+$", "") : "";
+        this.osrmUrl = osrmUrl != null ? osrmUrl.replaceAll("/+$", "") : "";
     }
 
     @Data
@@ -85,14 +101,14 @@ public class VehicleRestrictionValidationService {
     }
 
     /**
-     * Valida que el vehículo y la carga no violen ninguna restricción vial activa en el corredor.
+     * Valida que el vehículo y la carga no violen ninguna restricción vial activa en la ruta.
      * Si no es transitable, lanza {@link RouteIncompatibleException} con las razones bloqueantes.
      * Si el servicio no responde, lanza {@link RoutingServiceUnavailableException} para evitar iniciar a ciegas.
      */
     public void validateCompatibility(FreightLoad load, String driverId) {
         VehicleState vehicle = fetchVehicleState(driverId, load.getAssignedVehiclePlate());
 
-        // Principio de seguridad vial: bloqueo cerrado (fail-closed)
+        // Principio de seguridad vial: bloqueo cerrado ante falta de datos de flota
         if (vehicle == null) {
             throw new RoutingServiceUnavailableException(
                     "El servicio de flota y conductores (fleets-drivers) no respondió para el conductor "
@@ -123,29 +139,17 @@ public class VehicleRestrictionValidationService {
             grossWeight = cargo > 0 ? cargo : 10.0;
         }
 
-        // Estimación de ejes a partir de la tipología del vehículo o tipo requerido
-        int axles = estimateAxles(
-                load.getRequiredTruckType() != null ? load.getRequiredTruckType().name() : null,
-                vehicle.getVehicleType());
-        Double axleWeight = grossWeight > 0 ? (grossWeight / (double) axles) : null;
+        // Sin pesaje por eje certificado de báscula en fleets-drivers, no se envía peso estimado como dato duro
+        // para evitar bloqueos injustificados. Routing-Restrictions emite advertencia preventiva PESO_POR_EJE_SIN_DATO.
+        Double axleWeight = null;
 
         String corridor = resolveCorridor(load);
 
-        checkRouteCompatibility(plate, corridor, grossWeight, heightMeters, axleWeight, load.getId());
+        checkRouteCompatibility(plate, corridor, grossWeight, heightMeters, axleWeight, load);
     }
 
     /**
-     * Estimación de ejes a partir de la tipología vehicular colombiana.
-     * <p>
-     * Limitación técnica documentada: {@code fleets-drivers} no persiste pesaje por eje individual ni número de ejes.
-     * Se deduce la distribución estimada de carga dividiendo el peso bruto total entre el número típico de ejes:
-     * <ul>
-     *   <li>Tractomulas 3S3: 6 ejes</li>
-     *   <li>Tractomulas 3S2: 5 ejes</li>
-     *   <li>Cuatro manos (C4): 4 ejes</li>
-     *   <li>Doble troque (C3): 3 ejes</li>
-     *   <li>Camión sencillo (C2): 2 ejes</li>
-     * </ul>
+     * Estimación de ejes a partir de la tipología vehicular colombiana (para fines informativos o métricas).
      */
     static int estimateAxles(String requiredTruckType, String vehicleType) {
         String type = (vehicleType != null && !vehicleType.isBlank()) ? vehicleType.toUpperCase(Locale.ROOT)
@@ -176,7 +180,25 @@ public class VehicleRestrictionValidationService {
     }
 
     private void checkRouteCompatibility(String plate, String corridor, double grossWeight, double height,
-                                         Double axleWeight, Long loadId) {
+                                         Double axleWeight, FreightLoad load) {
+        Long loadId = load != null ? load.getId() : null;
+
+        // 1. Si la carga tiene coordenadas y OSRM está configurado, intentar validación sobre la geometría real
+        if (hasEndpoints(load) && osrmUrl != null && !osrmUrl.isBlank()) {
+            try {
+                if (validateViaOsrmGeometry(plate, load, height, grossWeight)) {
+                    log.info("Carga #{} validada exitosamente sobre geometría OSRM (placa {})", loadId, plate);
+                    return;
+                }
+            } catch (RouteIncompatibleException e) {
+                throw e; // Incompatibilidad física confirmada en todas las alternativas OSRM
+            } catch (Exception e) {
+                log.info("Validación geométrica OSRM no completada ({}); recurriendo a validación canónica de corredor '{}'",
+                        e.getMessage(), corridor);
+            }
+        }
+
+        // 2. Validación canónica por corredor vial (validate-compatibility)
         CompatibilityResponse response;
         try {
             Map<String, Object> reqBody = new HashMap<>();
@@ -215,6 +237,87 @@ public class VehicleRestrictionValidationService {
         }
     }
 
+    private boolean validateViaOsrmGeometry(String plate, FreightLoad load, double heightMeters, double grossWeightTons) {
+        String key = String.format(Locale.ROOT, "%.5f,%.5f;%.5f,%.5f",
+                load.getOriginLongitude(), load.getOriginLatitude(),
+                load.getDestinationLongitude(), load.getDestinationLatitude());
+        JsonNode osrmResponse = restClient.get()
+                .uri(osrmUrl + "/route/v1/driving/" + key + "?overview=full&geometries=geojson&alternatives=true")
+                .retrieve()
+                .body(JsonNode.class);
+
+        JsonNode routes = osrmResponse == null ? null : osrmResponse.get("routes");
+        if (routes == null || !routes.isArray() || routes.isEmpty()) {
+            return false;
+        }
+
+        List<String> lastBlockingReasons = new ArrayList<>();
+        boolean anyPassable = false;
+
+        for (JsonNode route : routes) {
+            JsonNode coordinates = route.path("geometry").path("coordinates");
+            if (!coordinates.isArray() || coordinates.size() < 2) {
+                continue;
+            }
+            List<List<Double>> path = toLatLng(sample(coordinates));
+            Map<String, Object> req = Map.of(
+                    "vehiclePlate", plate,
+                    "heightMeters", heightMeters,
+                    "grossWeightTons", grossWeightTons,
+                    "path", path
+            );
+
+            JsonNode valResult = restClient.post()
+                    .uri(routingRestrictionsUrl + "/api/v1/restrictions/validate-route")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(req)
+                    .retrieve()
+                    .body(JsonNode.class);
+
+            JsonNode blocking = valResult == null ? null : valResult.get("blocking");
+            if (blocking == null || !blocking.isArray() || blocking.isEmpty()) {
+                anyPassable = true;
+                break;
+            } else {
+                lastBlockingReasons.clear();
+                for (JsonNode hit : blocking) {
+                    lastBlockingReasons.add(hit.path("reason").asText(hit.path("kind").asText("Restricción en ruta")));
+                }
+            }
+        }
+
+        if (anyPassable) {
+            return true;
+        }
+        if (!lastBlockingReasons.isEmpty()) {
+            throw new RouteIncompatibleException(
+                    "La ruta no admite el vehículo (" + plate + ") por gálibo o peso en ninguna de sus alternativas OSRM",
+                    lastBlockingReasons);
+        }
+        return false;
+    }
+
+    private static boolean hasEndpoints(FreightLoad load) {
+        return load != null
+                && load.getOriginLatitude() != null && load.getOriginLongitude() != null
+                && load.getDestinationLatitude() != null && load.getDestinationLongitude() != null;
+    }
+
+    private static List<double[]> sample(JsonNode coordinates) {
+        int n = coordinates.size();
+        int count = Math.min(n, MAX_PATH_POINTS);
+        List<double[]> path = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            JsonNode point = coordinates.get(count == n ? i : (int) Math.round(i * (n - 1) / (double) (count - 1)));
+            path.add(new double[] {point.get(1).asDouble(), point.get(0).asDouble()});
+        }
+        return path;
+    }
+
+    private static List<List<Double>> toLatLng(List<double[]> path) {
+        return path.stream().map(p -> List.of(p[0], p[1])).toList();
+    }
+
     public static String resolveCorridor(FreightLoad load) {
         String origin = normalizeCity(load.getOriginCity());
         String dest = normalizeCity(load.getDestinationCity());
@@ -241,4 +344,3 @@ public class VehicleRestrictionValidationService {
                 .toUpperCase(Locale.ROOT);
     }
 }
-
