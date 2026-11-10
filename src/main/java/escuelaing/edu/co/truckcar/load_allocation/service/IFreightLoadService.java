@@ -34,6 +34,8 @@ public interface IFreightLoadService {
                                     LocalDateTime deliveredAt);
     /** El conductor asignado puede subir evidencias mientras la carga está ASSIGNED o IN_TRANSIT. */
     void requireDriverCanUploadProof(Long loadId, String authenticatedUserId);
+    /** El conductor asignado solo registra la entrega con la carga IN_TRANSIT (403 / 409 antes de leer evidencias). */
+    void requireDriverCanDeliver(Long loadId, String authenticatedUserId);
     FreightLoadResponse cancelLoad(Long loadId, String authenticatedUserId, String authenticatedRole, CancelLoadRequest request);
     List<FreightLoadResponse> getLoadsForDriver(String authenticatedUserId);
     List<FreightLoadResponse> listLoads(List<LoadStatus> statuses, String authenticatedUserId, String authenticatedRole);

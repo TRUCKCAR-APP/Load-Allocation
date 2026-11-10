@@ -166,6 +166,32 @@ class FreightLoadServiceReassignmentLoopTest {
         verify(outboxEventService, never()).enqueueLoadEvent(load, "assignment.unassigned");
     }
 
+    /** Notifications nunca confirmó el aviso: la propuesta PROPOSED también vence y la carga vuelve al motor. */
+    @Test
+    void proposalNeverNotifiedAlsoExpiresWithoutManualIntervention() {
+        service.assignDriver(21L, AssignDriverRequest.builder()
+                .driverId("driver-1").driverName("Driver").vehiclePlate("ABC123").build());
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.PROPOSED);
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(5);
+
+        assertThat(service.expireIfUnanswered(21L, cutoff)).isFalse(); // recién propuesta
+
+        load.setAssignmentStatusChangedAt(LocalDateTime.now().minusMinutes(6));
+        when(repository.findByAssignmentStatusAndAssignmentStatusChangedAtBefore(
+                org.mockito.ArgumentMatchers.eq(AssignmentStatus.NOTIFIED), any(LocalDateTime.class))).thenReturn(List.of());
+        when(repository.findByAssignmentStatusAndAssignmentStatusChangedAtBefore(
+                org.mockito.ArgumentMatchers.eq(AssignmentStatus.PROPOSED), any(LocalDateTime.class))).thenReturn(List.of(load));
+
+        new AssignmentTimeoutScheduler(repository, service).expireUnansweredAssignments();
+
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.TIMEOUT);
+        assertThat(load.getDiscardedDriverIds()).containsExactly("driver-1");
+        verify(outboxEventService).enqueueLoadEvent(load, "assignment.timeout");
+        // El motor de asignación puede proponer a otro conductor.
+        assertThat(service.proposeReassignment(21L, "driver-2", "Driver Two", "XYZ987")).isTrue();
+        assertThat(load.getAssignmentStatus()).isEqualTo(AssignmentStatus.PROPOSED);
+    }
+
     private void proposeAndNotify(String driverId) {
         service.assignDriver(21L, AssignDriverRequest.builder()
                 .driverId(driverId)
