@@ -8,7 +8,8 @@ spring:
   datasource:
     # Fuera de Docker (IDE/tests) la conexión es directa y el esquema va en currentSchema. En Docker se pasa por
     # PgBouncer y el search_path lo fija el rol del servicio.
-    url: jdbc:postgresql://localhost:5432/truckcar_db?currentSchema=load_allocation,public
+    # docker-compose y Kubernetes pasan SPRING_DATASOURCE_URL; el valor por defecto es para el IDE y los tests.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/truckcar_db?currentSchema=load_allocation,public}
     username: ${DB_USER:truckcar_admin}
     # Sin valor por defecto: fuera de Docker se define DB_PASSWORD (en el CI, el de su PostgreSQL efímero).
     password: ${DB_PASSWORD:}
@@ -31,7 +32,7 @@ spring:
     locations: classpath:db/migration
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: load-allocation-group
       auto-offset-reset: earliest
