@@ -94,6 +94,9 @@ class ProblemDetailContractTest {
                 .andExpect(jsonPath("$.type").value("https://truckcar.co/errors/validation-error"))
                 .andExpect(jsonPath("$.details.city").value("La ciudad es obligatoria"))
                 .andExpect(jsonPath("$.details.weight").value("El peso debe ser mayor que 0"))
+                .andExpect(jsonPath("$.errors[0].field").value("city"))
+                .andExpect(jsonPath("$.errors[0].message").value("La ciudad es obligatoria"))
+                .andExpect(jsonPath("$.errors[1].field").value("weight"))
                 .andExpect(jsonPath("$.message").value("La ciudad es obligatoria; El peso debe ser mayor que 0"))
                 .andExpect(jsonPath("$.detail").value("La ciudad es obligatoria; El peso debe ser mayor que 0"));
     }

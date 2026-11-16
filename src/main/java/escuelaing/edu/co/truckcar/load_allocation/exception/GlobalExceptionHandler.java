@@ -79,6 +79,9 @@ public class GlobalExceptionHandler {
         ResponseEntity<ProblemDetail> response = problem(HttpStatus.BAD_REQUEST, "validation-error",
                 "Validación de datos fallida", detail);
         response.getBody().setProperty("details", fieldErrors);
+        // La misma información como lista (el formato habitual de RFC 7807); details se conserva para la PWA.
+        response.getBody().setProperty("errors", fieldErrors.entrySet().stream()
+                .map(e -> Map.of("field", e.getKey(), "message", e.getValue())).toList());
         return response;
     }
 
