@@ -6,6 +6,8 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.json.ProblemDetailJacksonMixin;
 
 @Configuration
 public class JacksonConfig {
@@ -16,6 +18,9 @@ public class JacksonConfig {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        // Un ObjectMapper propio no trae el mixin que Spring registra en el suyo: sin él, las propiedades adicionales de
+        // un ProblemDetail (message, error, details...) saldrían anidadas en "properties" en lugar de en la raíz.
+        mapper.addMixIn(ProblemDetail.class, ProblemDetailJacksonMixin.class);
         return mapper;
     }
 }
