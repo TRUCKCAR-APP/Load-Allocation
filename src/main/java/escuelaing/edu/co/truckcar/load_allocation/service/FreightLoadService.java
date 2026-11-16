@@ -498,8 +498,12 @@ public class FreightLoadService implements IFreightLoadService {
         load.setCancelledAt(LocalDateTime.now());
         load.setCancellationReason(request.getReason().trim());
         load.setCancelledBy(authenticatedUserId);
+        // El evento sale con el conductor y el estado de la asignación de este momento: fleets-drivers lo usa para
+        // liberar al conductor y Notifications para avisarle. Después se limpia la asignación, que ya no existe: antes
+        // la carga quedaba CANCELLED con assignmentStatus ACCEPTED y el conductor puesto, un dato contradictorio.
+        outboxEventService.enqueueLoadEvent(load, "load.cancelled");
+        releaseAssignment(load);
         FreightLoad updated = repository.save(load);
-        outboxEventService.enqueueLoadEvent(updated, "load.cancelled");
         log.info("Carga #{} cancelada por {} ({}): {}", loadId, authenticatedUserId, authenticatedRole,
                 updated.getCancellationReason());
         return mapToResponse(updated);
@@ -645,6 +649,18 @@ public class FreightLoadService implements IFreightLoadService {
                     + ": se esperaba status " + expected + " pero es " + load.getStatus());
         }
         return load;
+    }
+
+    /** Una carga cancelada no tiene asignación: ni propuesta vigente ni conductor. */
+    private static void releaseAssignment(FreightLoad load) {
+        if (load.getAssignmentStatus() == null && load.getAssignedDriverId() == null) {
+            return;
+        }
+        load.setAssignmentStatus(null);
+        load.setAssignmentStatusChangedAt(LocalDateTime.now());
+        load.setAssignedDriverId(null);
+        load.setAssignedDriverName(null);
+        load.setAssignedVehiclePlate(null);
     }
 
     @Override

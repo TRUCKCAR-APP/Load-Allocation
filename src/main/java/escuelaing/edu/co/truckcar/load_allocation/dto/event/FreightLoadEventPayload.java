@@ -30,4 +30,6 @@ public class FreightLoadEventPayload {
     private String assignedVehiclePlate;
     private Integer assignmentAttempts;
     private List<String> excludedDriverIds;
+    /** Solo en load.cancelled: el motivo que escribió quien canceló (Notifications se lo cuenta al conductor). */
+    private String cancellationReason;
 }

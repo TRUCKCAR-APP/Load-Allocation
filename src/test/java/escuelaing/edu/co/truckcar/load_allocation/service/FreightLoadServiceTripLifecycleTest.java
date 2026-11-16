@@ -128,6 +128,37 @@ class FreightLoadServiceTripLifecycleTest {
         verify(outboxEventService).enqueueLoadEvent(load, "load.cancelled");
     }
 
+    /**
+     * El evento sale con el conductor y la asignación que tenía la carga (fleets-drivers lo libera y Notifications le
+     * avisa) y después la carga queda sin asignación: antes quedaba CANCELLED con ACCEPTED y el conductor puesto.
+     */
+    @Test
+    void cancellingAnAcceptedLoadTellsWhoHadItAndThenClearsTheAssignment() {
+        FreightLoad load = load(LoadStatus.ASSIGNED, AssignmentStatus.ACCEPTED);
+        load.setAssignedDriverName("Ana Pérez");
+        load.setAssignedVehiclePlate("DEM-410");
+        FreightLoadService service = serviceWith(load);
+        java.util.concurrent.atomic.AtomicReference<String> atEvent = new java.util.concurrent.atomic.AtomicReference<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            FreightLoad l = invocation.getArgument(0);
+            atEvent.set(l.getStatus() + "/" + l.getAssignmentStatus() + "/" + l.getAssignedDriverId() + "/"
+                    + l.getAssignedVehiclePlate() + "/" + l.getCancellationReason());
+            return null;
+        }).when(outboxEventService).enqueueLoadEvent(any(FreightLoad.class), org.mockito.ArgumentMatchers.eq("load.cancelled"));
+
+        FreightLoadResponse cancelled = service.cancelLoad(30L, "coord-1", "COORDINADOR",
+                CancelLoadRequest.builder().reason("  El cliente canceló el pedido ").build());
+
+        assertThat(atEvent.get()).isEqualTo("CANCELLED/ACCEPTED/driver-ana/DEM-410/El cliente canceló el pedido");
+        assertThat(cancelled.getStatus()).isEqualTo(LoadStatus.CANCELLED);
+        assertThat(cancelled.getAssignmentStatus()).isNull();
+        assertThat(cancelled.getAssignedDriverId()).isNull();
+        assertThat(cancelled.getAssignedDriverName()).isNull();
+        assertThat(cancelled.getAssignedVehiclePlate()).isNull();
+        assertThat(load.getAssignmentStatusChangedAt()).isNotNull();
+        assertThat(cancelled.getCancellationReason()).isEqualTo("El cliente canceló el pedido");
+    }
+
     @Test
     void cancellationRequiresCoordinatorOrAdminAndAPreTransitStatus() {
         CancelLoadRequest reason = CancelLoadRequest.builder().reason("Prueba").build();
