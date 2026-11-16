@@ -18,6 +18,9 @@ public interface IFreightLoadService {
     FreightLoadResponse publishLoad(CreateFreightLoadRequest request, UUID correlationId, String authenticatedUserId,
                                     String authenticatedRole);
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
+
+    FreightLoadResponse reassignLoad(Long loadId, String authenticatedUserId, String authenticatedRole,
+                                     AssignDriverRequest request);
     FreightLoadResponse notifyAssignment(Long loadId);
     boolean applyAssignmentNotified(Long loadId, String notifiedDriverId);
     boolean proposeReassignment(Long loadId, String driverId, String driverName, String vehiclePlate);

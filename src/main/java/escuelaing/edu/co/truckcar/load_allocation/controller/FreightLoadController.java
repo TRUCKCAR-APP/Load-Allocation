@@ -61,6 +61,16 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.assignDriver(loadId, request));
     }
 
+    /** La torre elige al conductor tras rechazos o vencimientos, o le quita una carga aceptada antes de salir. */
+    @PatchMapping("/{loadId}/reassign")
+    public ResponseEntity<FreightLoadResponse> reassignLoad(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
+            @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole,
+            @Valid @RequestBody AssignDriverRequest request) {
+        return ResponseEntity.ok(service.reassignLoad(loadId, authenticatedUserId, authenticatedRole, request));
+    }
+
     @PatchMapping("/{loadId}/assignment/notify")
     public ResponseEntity<FreightLoadResponse> notifyAssignment(
             @PathVariable Long loadId,

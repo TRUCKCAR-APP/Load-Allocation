@@ -113,4 +113,22 @@ class FreightLoadControllerDispatchAccessTest {
                 .andExpect(status().isForbidden());
         verifyNoInteractions(service);
     }
+
+    /** El controlador pasa la identidad al servicio, que decide; el cuerpo se valida como el de /assign. */
+    @Test
+    void reassignPassesTheIdentityAndValidatesTheBody() throws Exception {
+        when(service.reassignLoad(anyLong(), any(), any(), any())).thenReturn(
+                escuelaing.edu.co.truckcar.load_allocation.dto.response.FreightLoadResponse.builder().id(5L).build());
+
+        mvc.perform(patch("/api/v1/loads/5/reassign").header("X-Auth-User", "coord-1").header("X-Auth-Role", "COORDINADOR")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(ASSIGN_BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(5));
+        org.mockito.Mockito.verify(service).reassignLoad(org.mockito.ArgumentMatchers.eq(5L),
+                org.mockito.ArgumentMatchers.eq("coord-1"), org.mockito.ArgumentMatchers.eq("COORDINADOR"), any());
+
+        mvc.perform(patch("/api/v1/loads/5/reassign").header("X-Auth-User", "coord-1").header("X-Auth-Role", "COORDINADOR")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{\"driverName\":\"x\"}"))
+                .andExpect(status().isBadRequest());
+    }
 }
