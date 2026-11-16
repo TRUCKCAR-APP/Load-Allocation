@@ -41,7 +41,7 @@ class FreightLoadControllerDispatchAccessTest {
     void setUp() {
         service = mock(IFreightLoadService.class);
         FreightLoadResponse ok = FreightLoadResponse.builder().build();
-        when(service.assignDriver(anyLong(), any())).thenReturn(ok);
+        when(service.assignDriver(anyLong(), any(), any())).thenReturn(ok);
         when(service.notifyAssignment(anyLong())).thenReturn(ok);
         when(service.timeoutAssignment(anyLong())).thenReturn(ok);
         when(service.getDriverCommitments(any())).thenReturn(java.util.List.of());

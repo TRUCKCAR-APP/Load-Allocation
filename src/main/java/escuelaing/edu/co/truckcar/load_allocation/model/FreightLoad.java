@@ -147,6 +147,13 @@ public class FreightLoad {
     private Set<String> discardedDriverIds = new LinkedHashSet<>();
 
     /** Bloqueo optimista: evita que el scheduler de TIMEOUT y un accept/reject concurrente pisen el estado. */
+    /**
+     * Quién hizo la propuesta que se está emitiendo (TORRE o MOTOR). No se guarda: solo viaja en el evento
+     * assignment.proposed para que Notifications no le diga al conductor que se la propuso el motor cuando fue la torre.
+     */
+    @Transient
+    private String proposedBy;
+
     @Version
     @Column(name = "version", columnDefinition = "bigint default 0")
     private Long version;

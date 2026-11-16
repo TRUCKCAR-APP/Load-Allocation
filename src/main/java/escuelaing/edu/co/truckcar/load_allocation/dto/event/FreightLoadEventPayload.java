@@ -32,4 +32,6 @@ public class FreightLoadEventPayload {
     private List<String> excludedDriverIds;
     /** Solo en load.cancelled: el motivo que escribió quien canceló (Notifications se lo cuenta al conductor). */
     private String cancellationReason;
+    /** Solo en assignment.proposed: TORRE (asignación manual) o MOTOR (motor de asignación). */
+    private String proposedBy;
 }

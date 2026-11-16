@@ -213,4 +213,40 @@ class FreightLoadServiceReassignTest {
 
         assertThatThrownBy(this::reassign).isInstanceOf(FreightLoadNotFoundException.class);
     }
+
+    /** Lote 4: el evento dice que la propuesta la hizo la torre, para que el aviso al conductor no culpe al motor. */
+    @Test
+    void theProposalSaysItCameFromTheTower() {
+        FreightLoad load = givenLoad(LoadStatus.AVAILABLE, AssignmentStatus.REJECTED, "ana");
+        AtomicReference<String> proposedBy = new AtomicReference<>();
+        doAnswer(invocation -> {
+            proposedBy.set(invocation.<FreightLoad>getArgument(0).getProposedBy());
+            return null;
+        }).when(outbox).enqueueLoadEvent(any(FreightLoad.class), eq("assignment.proposed"));
+
+        reassign();
+
+        assertThat(proposedBy.get()).isEqualTo("TORRE");
+    }
+
+    @Test
+    void assignDriverMarksTheProposalByWhoAskedForIt() {
+        AtomicReference<String> proposedBy = new AtomicReference<>();
+        doAnswer(invocation -> {
+            proposedBy.set(invocation.<FreightLoad>getArgument(0).getProposedBy());
+            return null;
+        }).when(outbox).enqueueLoadEvent(any(FreightLoad.class), eq("assignment.proposed"));
+
+        givenLoad(LoadStatus.AVAILABLE, null, null);
+        service.assignDriver(LOAD_ID, TO_LUIS, "COORDINADOR");
+        assertThat(proposedBy.get()).isEqualTo("TORRE");
+
+        givenLoad(LoadStatus.AVAILABLE, null, null);
+        service.assignDriver(LOAD_ID, TO_LUIS, "SYSTEM");
+        assertThat(proposedBy.get()).isEqualTo("MOTOR");
+
+        givenLoad(LoadStatus.AVAILABLE, null, null);
+        service.assignDriver(LOAD_ID, TO_LUIS);
+        assertThat(proposedBy.get()).as("sin rol: llamada interna del motor").isEqualTo("MOTOR");
+    }
 }

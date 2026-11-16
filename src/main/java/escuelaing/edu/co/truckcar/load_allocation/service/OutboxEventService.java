@@ -44,6 +44,7 @@ public class OutboxEventService {
                 .excludedDriverIds(load.getDiscardedDriverIds() == null
                         ? List.of() : List.copyOf(load.getDiscardedDriverIds()))
                 .cancellationReason(load.getCancellationReason())
+                .proposedBy(load.getProposedBy())
                 .build();
 
         EventEnvelope<FreightLoadEventPayload> envelope = EventEnvelope.<FreightLoadEventPayload>builder()
