@@ -120,10 +120,15 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.listLoads(statuses, authenticatedUserId, authenticatedRole));
     }
 
-    /** Conductores ocupados (carga aceptada, en ruta o con propuesta vigente); lo usa el motor de asignación. */
+    /**
+     * Conductores ocupados (carga aceptada, en ruta o con propuesta vigente); lo usa el motor de asignación. Revela
+     * qué conductores están libres: solo la torre de control y los servicios internos (KAN-43).
+     */
     @GetMapping("/driver-commitments")
     public ResponseEntity<List<DriverCommitmentResponse>> getDriverCommitments(
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        requireDispatcherOrInternal(authenticatedUserId, authenticatedRole, "la ocupación de los conductores");
         return ResponseEntity.ok(service.getDriverCommitments(authenticatedRole));
     }
 
@@ -143,10 +148,16 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.getLoadById(loadId, authenticatedUserId, authenticatedRole));
     }
 
+    /**
+     * Bolsa de cargas sin conductor de todas las empresas (con su presupuesto): la usan la torre de control y el motor
+     * de asignación. La app del conductor no la consulta; sus cargas llegan por /mine.
+     */
     @GetMapping("/available")
     public ResponseEntity<List<FreightLoadResponse>> getAvailableLoads(
             @RequestParam(required = false) TruckTypeRequired truckType,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId,
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole) {
+        requireDispatcherOrInternal(authenticatedUserId, authenticatedRole, "la bolsa de cargas disponibles");
         return ResponseEntity.ok(service.getAvailableLoads(truckType, authenticatedRole));
     }
 
@@ -171,5 +182,21 @@ public class FreightLoadController {
             throw new AssignmentAccessDeniedException("El rol " + authenticatedRole
                     + " no puede operar el ciclo de asignación (solo COORDINADOR, ADMIN o el motor de asignación)", false);
         }
+    }
+
+    /**
+     * Consultas de toda la operación: torre de control (COORDINADOR, ADMIN), el motor con X-Auth-Role: SYSTEM o una
+     * llamada interna sin identidad. Por el gateway nunca llega una petición sin X-Auth-User en estas rutas (exigen
+     * JWT y el gateway reescribe X-Auth-*), así que "sin identidad" solo puede venir de la red interna.
+     */
+    private static void requireDispatcherOrInternal(String authenticatedUserId, String authenticatedRole, String resource) {
+        boolean anonymous = (authenticatedUserId == null || authenticatedUserId.isBlank())
+                && (authenticatedRole == null || authenticatedRole.isBlank());
+        // Set.of(...).contains(null) lanza NullPointerException: el rol vacío se comprueba antes.
+        if (anonymous || (authenticatedRole != null && DISPATCH_ROLES.contains(authenticatedRole))) {
+            return;
+        }
+        throw new AssignmentAccessDeniedException("El rol " + authenticatedRole + " no tiene acceso a " + resource
+                + " (solo COORDINADOR, ADMIN o servicios internos)", false);
     }
 }
