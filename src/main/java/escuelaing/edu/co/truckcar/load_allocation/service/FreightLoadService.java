@@ -39,6 +39,9 @@ public class FreightLoadService implements IFreightLoadService {
 
     private static final Set<AssignmentStatus> REASSIGNABLE =
             EnumSet.of(AssignmentStatus.REJECTED, AssignmentStatus.TIMEOUT);
+    /** Además de lo que reasigna el motor, la torre puede reabrir una carga que se quedó sin conductores. */
+    private static final Set<AssignmentStatus> TOWER_REASSIGNABLE = EnumSet.of(AssignmentStatus.REJECTED,
+            AssignmentStatus.TIMEOUT, AssignmentStatus.UNASSIGNED_NO_DRIVERS);
     /** Un conductor con una carga en estos status está ocupado: no puede aceptar ni recibir otra. */
     private static final Set<LoadStatus> DRIVER_COMMITTED = EnumSet.of(LoadStatus.ASSIGNED, LoadStatus.IN_TRANSIT);
     /** Propuesta vigente: el conductor debe responderla antes de recibir otra. */
@@ -114,6 +117,68 @@ public class FreightLoadService implements IFreightLoadService {
         FreightLoad updated = propose(load, request.getDriverId(), request.getDriverName(), request.getVehiclePlate());
         log.info("Propuesta de asignación creada para carga #{} y conductor {}", updated.getId(), request.getDriverName());
 
+        return mapToResponse(updated);
+    }
+
+    /**
+     * La torre de control elige al conductor de una carga aunque ya haya pasado por rechazos o vencimientos
+     * (assignDriver solo admite cargas sin propuesta), o le quita una carga aceptada a su conductor antes de que salga.
+     * <ul>
+     *   <li>AVAILABLE sin propuesta, REJECTED, TIMEOUT o UNASSIGNED_NO_DRIVERS: se propone al conductor elegido.</li>
+     *   <li>ASSIGNED (aceptada, sin iniciar el viaje): el conductor actual queda descartado y se emite
+     *   assignment.revoked con él (fleets-drivers lo libera y Notifications le avisa); después se propone al nuevo.</li>
+     * </ul>
+     * Con una propuesta vigente (PROPOSED/NOTIFIED) no: el conductor podría estar aceptándola en ese momento. La
+     * propuesta sale por propose(), así que Notifications avisa al nuevo conductor y la carga pasa sola a NOTIFIED.
+     */
+    @Override
+    @Transactional
+    public FreightLoadResponse reassignLoad(Long loadId, String authenticatedUserId, String authenticatedRole,
+                                            AssignDriverRequest request) {
+        if (!isControlTower(authenticatedRole)) {
+            boolean anonymous = authenticatedRole == null || authenticatedRole.isBlank();
+            throw new AssignmentAccessDeniedException("Solo la torre de control (COORDINADOR o ADMIN) puede reasignar la carga #"
+                    + loadId + (anonymous ? "" : " (rol actual: " + authenticatedRole + ")"), anonymous);
+        }
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        String driverId = request.getDriverId().trim();
+        boolean accepted = load.getStatus() == LoadStatus.ASSIGNED
+                && load.getAssignmentStatus() == AssignmentStatus.ACCEPTED;
+        boolean open = load.getStatus() == LoadStatus.AVAILABLE
+                && (load.getAssignmentStatus() == null || TOWER_REASSIGNABLE.contains(load.getAssignmentStatus()));
+        if (!accepted && !open) {
+            throw new InvalidLoadOperationException("La carga #" + loadId + " no se puede reasignar: " + (load.getStatus() == LoadStatus.AVAILABLE
+                    ? "tiene una propuesta vigente (" + load.getAssignmentStatus() + ") para " + load.getAssignedDriverName()
+                      + "; espere a que la responda o venza"
+                    : "está en status " + load.getStatus() + " y solo se reasigna antes de iniciar el viaje"));
+        }
+        if (accepted && driverId.equals(load.getAssignedDriverId())) {
+            throw new InvalidLoadOperationException("El conductor " + driverId + " ya tiene aceptada la carga #" + loadId);
+        }
+        if (load.getDiscardedDriverIds().contains(driverId)) {
+            throw new InvalidLoadOperationException("El conductor " + driverId
+                    + " ya rechazó, dejó vencer o le quitaron la carga #" + loadId);
+        }
+        commitmentsOf(driverId, loadId).stream().findFirst().ifPresent(other -> {
+            throw new InvalidLoadOperationException("El conductor " + driverId + " está ocupado con la carga #"
+                    + other.getId() + " (" + describeCommitment(other) + "); no puede recibir la carga #" + loadId);
+        });
+
+        if (accepted) {
+            String previousDriver = load.getAssignedDriverId();
+            load.setStatus(LoadStatus.AVAILABLE);
+            load.setAssignedAt(null);
+            discardCurrentDriver(load);
+            // El evento sale con el conductor anterior todavía puesto: es a quien hay que liberar y avisar.
+            outboxEventService.enqueueLoadEvent(load, "assignment.revoked");
+            log.info("Carga #{}: la torre ({}) se la quitó al conductor {}", loadId, authenticatedUserId, previousDriver);
+        } else if (load.getAssignmentStatus() == AssignmentStatus.UNASSIGNED_NO_DRIVERS) {
+            // Nuevo ciclo de asignación, como en assignDriver: se reinicia el límite de intentos del motor.
+            load.setAssignmentAttempts(0);
+        }
+        FreightLoad updated = propose(load, driverId, request.getDriverName(), request.getVehiclePlate());
+        log.info("Carga #{} reasignada por la torre ({}) al conductor {}", loadId, authenticatedUserId, driverId);
         return mapToResponse(updated);
     }
 
