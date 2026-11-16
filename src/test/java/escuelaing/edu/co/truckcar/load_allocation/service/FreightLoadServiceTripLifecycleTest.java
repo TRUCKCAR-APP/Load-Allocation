@@ -157,6 +157,7 @@ class FreightLoadServiceTripLifecycleTest {
         assertThat(cancelled.getAssignedVehiclePlate()).isNull();
         assertThat(load.getAssignmentStatusChangedAt()).isNotNull();
         assertThat(cancelled.getCancellationReason()).isEqualTo("El cliente canceló el pedido");
+        assertThat(load.getDiscardedDriverIds()).as("puede seguir leyéndola para ver que se canceló").contains(DRIVER);
     }
 
     @Test

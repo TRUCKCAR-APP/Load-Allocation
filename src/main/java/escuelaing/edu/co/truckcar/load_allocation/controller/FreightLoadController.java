@@ -31,6 +31,7 @@ public class FreightLoadController {
     private static final Set<String> DISPATCH_ROLES = Set.of("COORDINADOR", "ADMIN", "SYSTEM");
 
     private final IFreightLoadService service;
+    private final escuelaing.edu.co.truckcar.load_allocation.service.DriverAccountGuard driverAccountGuard;
 
     @PostMapping
     public ResponseEntity<FreightLoadResponse> publishLoad(
@@ -84,6 +85,10 @@ public class FreightLoadController {
     public ResponseEntity<FreightLoadResponse> acceptAssignment(
             @PathVariable Long loadId,
             @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        // Sin usuario el servicio responde 401; con usuario, la cuenta tiene que estar verificada (Lote 2).
+        if (authenticatedUserId != null && !authenticatedUserId.isBlank()) {
+            driverAccountGuard.requireVerified(authenticatedUserId);
+        }
         return ResponseEntity.ok(service.acceptAssignment(loadId, authenticatedUserId));
     }
 

@@ -441,6 +441,7 @@ public class FreightLoadService implements IFreightLoadService {
     private static final Set<String> CONTROL_TOWER_ROLES = Set.of("COORDINADOR", "ADMIN");
     /** Empresa generadora de carga: publica cargas y solo ve y gestiona las suyas. */
     private static final String GENERADOR = "GENERADOR";
+    private static final String CONDUCTOR = "CONDUCTOR";
     private static final Set<String> PUBLISHER_ROLES = Set.of(GENERADOR, "COORDINADOR", "ADMIN");
     private static final Set<LoadStatus> CANCELLABLE = EnumSet.of(LoadStatus.AVAILABLE, LoadStatus.ASSIGNED);
 
@@ -716,10 +717,43 @@ public class FreightLoadService implements IFreightLoadService {
         return load;
     }
 
-    /** Una carga cancelada no tiene asignación: ni propuesta vigente ni conductor. */
+    /**
+     * Quién puede leer una carga (Lote 2): la torre de control, el motor (SYSTEM), los servicios internos (sin
+     * identidad: por el gateway esta ruta siempre lleva X-Auth-User), el generador dueño y el conductor que la tiene o
+     * al que se le ofreció (los descartados: la rechazó, la dejó vencer, se la quitaron o se canceló teniéndola, para
+     * que su app pueda mostrar qué pasó). Ningún otro conductor lee una carga ajena con su presupuesto.
+     */
+    private void requireReadAccess(FreightLoad load, String authenticatedUserId, String authenticatedRole) {
+        boolean anonymous = (authenticatedUserId == null || authenticatedUserId.isBlank())
+                && (authenticatedRole == null || authenticatedRole.isBlank());
+        if (anonymous || isControlTower(authenticatedRole) || "SYSTEM".equals(authenticatedRole)) {
+            return;
+        }
+        if (GENERADOR.equals(authenticatedRole)) {
+            if (isOwningGenerator(load, authenticatedUserId, authenticatedRole)) {
+                return;
+            }
+            throw new AssignmentAccessDeniedException("La carga #" + load.getId() + " pertenece a otra empresa generadora", false);
+        }
+        if (CONDUCTOR.equals(authenticatedRole) && authenticatedUserId != null
+                && (authenticatedUserId.equals(load.getAssignedDriverId())
+                    || load.getDiscardedDriverIds().contains(authenticatedUserId))) {
+            return;
+        }
+        throw new AssignmentAccessDeniedException("No tiene acceso a la carga #" + load.getId()
+                + ": solo la ve el conductor al que se le asignó u ofreció, el generador dueño y la torre de control", false);
+    }
+
+    /**
+     * Una carga cancelada no tiene asignación: ni propuesta vigente ni conductor. Quien la tenía queda entre los
+     * descartados, para que pueda seguir leyéndola y su app le muestre que se canceló.
+     */
     private static void releaseAssignment(FreightLoad load) {
         if (load.getAssignmentStatus() == null && load.getAssignedDriverId() == null) {
             return;
+        }
+        if (load.getAssignedDriverId() != null) {
+            load.getDiscardedDriverIds().add(load.getAssignedDriverId());
         }
         load.setAssignmentStatus(null);
         load.setAssignmentStatusChangedAt(LocalDateTime.now());
@@ -733,10 +767,7 @@ public class FreightLoadService implements IFreightLoadService {
     public FreightLoadResponse getLoadById(Long loadId, String authenticatedUserId, String authenticatedRole) {
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
-        // Un generador solo consulta sus propias cargas; conductores, torre y servicios internos no cambian.
-        if (GENERADOR.equals(authenticatedRole) && !isOwningGenerator(load, authenticatedUserId, authenticatedRole)) {
-            throw new AssignmentAccessDeniedException("La carga #" + loadId + " pertenece a otra empresa generadora", false);
-        }
+        requireReadAccess(load, authenticatedUserId, authenticatedRole);
         return mapToResponse(load);
     }
 

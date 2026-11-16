@@ -163,7 +163,28 @@ class FreightLoadServiceGeneratorTest {
         assertThatThrownBy(() -> service.getLoadById(6L, GENERATOR, "GENERADOR"))
                 .isInstanceOf(AssignmentAccessDeniedException.class);
         assertThat(service.getLoadById(6L, null, null).getId()).isEqualTo(6L);
+    }
+
+    /** Lote 2: un conductor solo lee la carga que tiene o que se le ofreció; la torre y el motor, todas. */
+    @Test
+    void aDriverReadsOnlyTheLoadHeHasOrWasOffered() {
+        FreightLoad mine = ownedLoad(5L, "otra-empresa", LoadStatus.ASSIGNED);
+        mine.setAssignedDriverId("driver-ana");
+        FreightLoad offered = ownedLoad(6L, "otra-empresa", LoadStatus.AVAILABLE);
+        offered.setAssignedDriverId("driver-luis");
+        offered.getDiscardedDriverIds().add("driver-ana");
+        ownedLoad(7L, "otra-empresa", LoadStatus.AVAILABLE).setAssignedDriverId("driver-luis");
+
+        assertThat(service.getLoadById(5L, "driver-ana", "CONDUCTOR").getId()).isEqualTo(5L);
         assertThat(service.getLoadById(6L, "driver-ana", "CONDUCTOR").getId()).isEqualTo(6L);
+        assertThatThrownBy(() -> service.getLoadById(7L, "driver-ana", "CONDUCTOR"))
+                .isInstanceOf(AssignmentAccessDeniedException.class)
+                .hasMessageContaining("No tiene acceso a la carga #7");
+        for (String role : new String[]{"COORDINADOR", "ADMIN", "SYSTEM"}) {
+            assertThat(service.getLoadById(7L, "u-1", role).getId()).isEqualTo(7L);
+        }
+        assertThatThrownBy(() -> service.getLoadById(7L, "u-1", "")).isInstanceOf(AssignmentAccessDeniedException.class);
+        assertThatThrownBy(() -> service.getLoadById(7L, null, "CONDUCTOR")).isInstanceOf(AssignmentAccessDeniedException.class);
     }
 
     @Test

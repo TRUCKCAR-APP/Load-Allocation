@@ -34,6 +34,9 @@ class FreightLoadControllerDispatchAccessTest {
     private IFreightLoadService service;
     private MockMvc mvc;
 
+    private final escuelaing.edu.co.truckcar.load_allocation.service.DriverAccountGuard accountGuard =
+            mock(escuelaing.edu.co.truckcar.load_allocation.service.DriverAccountGuard.class);
+
     @BeforeEach
     void setUp() {
         service = mock(IFreightLoadService.class);
@@ -43,7 +46,7 @@ class FreightLoadControllerDispatchAccessTest {
         when(service.timeoutAssignment(anyLong())).thenReturn(ok);
         when(service.getDriverCommitments(any())).thenReturn(java.util.List.of());
         when(service.getAvailableLoads(any(), any())).thenReturn(java.util.List.of());
-        mvc = MockMvcBuilders.standaloneSetup(new FreightLoadController(service))
+        mvc = MockMvcBuilders.standaloneSetup(new FreightLoadController(service, accountGuard))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -130,5 +133,28 @@ class FreightLoadControllerDispatchAccessTest {
         mvc.perform(patch("/api/v1/loads/5/reassign").header("X-Auth-User", "coord-1").header("X-Auth-Role", "COORDINADOR")
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{\"driverName\":\"x\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    /** Lote 2: la cuenta del conductor tiene que estar verificada antes de aceptar. */
+    @Test
+    void anUnverifiedDriverCannotAccept() throws Exception {
+        org.mockito.Mockito.doThrow(new escuelaing.edu.co.truckcar.load_allocation.exception.AssignmentAccessDeniedException(
+                        "No puede aceptar cargas: su cuenta aún no ha sido verificada por un administrador.", false))
+                .when(accountGuard).requireVerified("driver-pendiente");
+
+        mvc.perform(patch("/api/v1/loads/5/assignment/accept").header("X-Auth-User", "driver-pendiente").header("X-Auth-Role", "CONDUCTOR"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403));
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).acceptAssignment(anyLong(), any());
+    }
+
+    @Test
+    void aVerifiedDriverAccepts() throws Exception {
+        when(service.acceptAssignment(anyLong(), any())).thenReturn(
+                escuelaing.edu.co.truckcar.load_allocation.dto.response.FreightLoadResponse.builder().id(5L).build());
+
+        mvc.perform(patch("/api/v1/loads/5/assignment/accept").header("X-Auth-User", "driver-1").header("X-Auth-Role", "CONDUCTOR"))
+                .andExpect(status().isOk());
+        org.mockito.Mockito.verify(accountGuard).requireVerified("driver-1");
     }
 }
