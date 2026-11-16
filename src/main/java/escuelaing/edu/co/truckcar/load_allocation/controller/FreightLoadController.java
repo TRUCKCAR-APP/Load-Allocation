@@ -59,7 +59,7 @@ public class FreightLoadController {
             @RequestHeader(value = AUTH_ROLE_HEADER, required = false) String authenticatedRole,
             @Valid @RequestBody AssignDriverRequest request) {
         requireDispatcher(authenticatedRole);
-        return ResponseEntity.ok(service.assignDriver(loadId, request));
+        return ResponseEntity.ok(service.assignDriver(loadId, request, authenticatedRole));
     }
 
     /** La torre elige al conductor tras rechazos o vencimientos, o le quita una carga aceptada antes de salir. */

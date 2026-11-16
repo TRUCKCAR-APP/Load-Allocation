@@ -90,6 +90,12 @@ public class FreightLoadService implements IFreightLoadService {
     @Override
     @Transactional
     public FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request) {
+        return assignDriver(loadId, request, "SYSTEM");
+    }
+
+    @Override
+    @Transactional
+    public FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request, String authenticatedRole) {
         FreightLoad load = repository.findById(loadId)
                 .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
 
@@ -114,7 +120,8 @@ public class FreightLoadService implements IFreightLoadService {
             log.info("Carga #{} reabierta desde UNASSIGNED_NO_DRIVERS para el conductor {}", loadId, request.getDriverId());
         }
 
-        FreightLoad updated = propose(load, request.getDriverId(), request.getDriverName(), request.getVehiclePlate());
+        FreightLoad updated = propose(load, request.getDriverId(), request.getDriverName(), request.getVehiclePlate(),
+                isControlTower(authenticatedRole) ? PROPOSED_BY_TOWER : PROPOSED_BY_ENGINE);
         log.info("Propuesta de asignación creada para carga #{} y conductor {}", updated.getId(), request.getDriverName());
 
         return mapToResponse(updated);
@@ -177,7 +184,7 @@ public class FreightLoadService implements IFreightLoadService {
             // Nuevo ciclo de asignación, como en assignDriver: se reinicia el límite de intentos del motor.
             load.setAssignmentAttempts(0);
         }
-        FreightLoad updated = propose(load, driverId, request.getDriverName(), request.getVehiclePlate());
+        FreightLoad updated = propose(load, driverId, request.getDriverName(), request.getVehiclePlate(), PROPOSED_BY_TOWER);
         log.info("Carga #{} reasignada por la torre ({}) al conductor {}", loadId, authenticatedUserId, driverId);
         return mapToResponse(updated);
     }
@@ -210,7 +217,7 @@ public class FreightLoadService implements IFreightLoadService {
             markUnassigned(load, "se alcanzó el límite de " + maxAssignmentAttempts + " intentos");
             return false;
         }
-        propose(load, driverId, driverName, vehiclePlate);
+        propose(load, driverId, driverName, vehiclePlate, PROPOSED_BY_ENGINE);
         log.info("Carga #{} reasignada al conductor {} (intento {}/{})",
                 loadId, driverId, load.getAssignmentAttempts(), maxAssignmentAttempts);
         return true;
@@ -261,7 +268,9 @@ public class FreightLoadService implements IFreightLoadService {
         return true;
     }
 
-    private FreightLoad propose(FreightLoad load, String driverId, String driverName, String vehiclePlate) {
+    private FreightLoad propose(FreightLoad load, String driverId, String driverName, String vehiclePlate,
+                                String proposedBy) {
+        load.setProposedBy(proposedBy);
         load.setAssignedDriverId(driverId);
         load.setAssignedDriverName(driverName);
         load.setAssignedVehiclePlate(vehiclePlate);
@@ -441,6 +450,8 @@ public class FreightLoadService implements IFreightLoadService {
     private static final Set<String> CONTROL_TOWER_ROLES = Set.of("COORDINADOR", "ADMIN");
     /** Empresa generadora de carga: publica cargas y solo ve y gestiona las suyas. */
     private static final String GENERADOR = "GENERADOR";
+    static final String PROPOSED_BY_TOWER = "TORRE";
+    static final String PROPOSED_BY_ENGINE = "MOTOR";
     private static final String CONDUCTOR = "CONDUCTOR";
     private static final Set<String> PUBLISHER_ROLES = Set.of(GENERADOR, "COORDINADOR", "ADMIN");
     private static final Set<LoadStatus> CANCELLABLE = EnumSet.of(LoadStatus.AVAILABLE, LoadStatus.ASSIGNED);

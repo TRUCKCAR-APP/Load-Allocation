@@ -19,6 +19,9 @@ public interface IFreightLoadService {
                                     String authenticatedRole);
     FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request);
 
+    /** El rol decide quién propuso: SYSTEM es el motor de asignación; COORDINADOR o ADMIN, la torre. */
+    FreightLoadResponse assignDriver(Long loadId, AssignDriverRequest request, String authenticatedRole);
+
     FreightLoadResponse reassignLoad(Long loadId, String authenticatedUserId, String authenticatedRole,
                                      AssignDriverRequest request);
     FreightLoadResponse notifyAssignment(Long loadId);
