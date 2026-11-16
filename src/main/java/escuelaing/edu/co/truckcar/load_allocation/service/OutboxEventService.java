@@ -43,6 +43,7 @@ public class OutboxEventService {
                 .assignmentAttempts(load.getAssignmentAttempts())
                 .excludedDriverIds(load.getDiscardedDriverIds() == null
                         ? List.of() : List.copyOf(load.getDiscardedDriverIds()))
+                .cancellationReason(load.getCancellationReason())
                 .build();
 
         EventEnvelope<FreightLoadEventPayload> envelope = EventEnvelope.<FreightLoadEventPayload>builder()

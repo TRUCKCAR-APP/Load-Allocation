@@ -117,7 +117,7 @@ class FreightLoadStateMachineMatrixTest {
 
         final String event;
         final LoadStatus resultingStatus;
-        /** null: la operación no cambia assignmentStatus. */
+        /** null: la operación no cambia assignmentStatus (salvo CANCEL, que la deja vacía). */
         final AssignmentStatus resultingAssignment;
         /** Operación del motor (Kafka o scheduler): ante un estado inválido devuelve false en lugar de lanzar. */
         final boolean returnsFalseWhenInvalid;
@@ -206,8 +206,14 @@ class FreightLoadStateMachineMatrixTest {
                 assertThat(result).as("la operación del motor se aplicó").isEqualTo(true);
             }
             assertThat(load.getStatus()).isEqualTo(operation.resultingStatus);
-            assertThat(load.getAssignmentStatus())
-                    .isEqualTo(operation.resultingAssignment != null ? operation.resultingAssignment : assignment);
+            if (operation == Operation.CANCEL) {
+                // Una carga cancelada no conserva la asignación: ni estado ni conductor.
+                assertThat(load.getAssignmentStatus()).isNull();
+                assertThat(load.getAssignedDriverId()).isNull();
+            } else {
+                assertThat(load.getAssignmentStatus())
+                        .isEqualTo(operation.resultingAssignment != null ? operation.resultingAssignment : assignment);
+            }
             verify(outbox).enqueueLoadEvent(any(FreightLoad.class), eq(operation.event));
             if (operation == Operation.REJECT || operation == Operation.TIMEOUT
                     || operation == Operation.EXPIRE_IF_UNANSWERED) {
