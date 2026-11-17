@@ -95,7 +95,9 @@ class LoadEventContractTest {
     @Test
     void aUserEventWithUnknownFieldsIsStillApplied() {
         DriverAccountStatusRepository accounts = mock(DriverAccountStatusRepository.class);
-        new UserAccountEventListener(accounts, mapper).handleUserEvent("""
+        new UserAccountEventListener(accounts,
+                mock(escuelaing.edu.co.truckcar.load_allocation.repository.DriverAffiliationRepository.class), mapper)
+                .handleUserEvent("""
                 {"eventId":"e1","eventType":"user.status.changed","nuevoCampo":true,
                  "payload":{"userId":"ana","status":"ACTIVE","previousStatus":null,"otroCampo":[1,2]}}""");
 

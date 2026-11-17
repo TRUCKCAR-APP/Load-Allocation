@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import escuelaing.edu.co.truckcar.load_allocation.exception.AssignmentAccessDeniedException;
 import escuelaing.edu.co.truckcar.load_allocation.listener.UserAccountEventListener;
 import escuelaing.edu.co.truckcar.load_allocation.model.DriverAccountStatus;
+import escuelaing.edu.co.truckcar.load_allocation.model.DriverAffiliation;
 import escuelaing.edu.co.truckcar.load_allocation.repository.DriverAccountStatusRepository;
+import escuelaing.edu.co.truckcar.load_allocation.repository.DriverAffiliationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -38,8 +40,58 @@ class DriverAccountGuardTest {
             table.put(s.getDriverId(), s);
             return s;
         });
-        guard = new DriverAccountGuard(repository);
-        listener = new UserAccountEventListener(repository, new ObjectMapper());
+        affiliationRepository = mock(DriverAffiliationRepository.class);
+        when(affiliationRepository.findById(anyString()))
+                .thenAnswer(i -> Optional.ofNullable(affiliationTable.get(i.<String>getArgument(0))));
+        when(affiliationRepository.save(any(DriverAffiliation.class))).thenAnswer(i -> {
+            DriverAffiliation a = i.getArgument(0);
+            affiliationTable.put(a.getDriverId(), a);
+            return a;
+        });
+        guard = new DriverAccountGuard(repository, affiliationRepository);
+        listener = new UserAccountEventListener(repository, affiliationRepository, new ObjectMapper());
+    }
+
+    private final Map<String, DriverAffiliation> affiliationTable = new HashMap<>();
+    private DriverAffiliationRepository affiliationRepository;
+
+    private void affiliation(String userId, String driverType, String status, boolean eligible) {
+        event("user.affiliation.changed", userId, ",\"driverType\":\"" + driverType + "\",\"companyId\":"
+                + ("EMPRESA".equals(driverType) ? "\"c-1\",\"companyName\":\"Transportes Andinos\"" : "null")
+                + ",\"affiliationStatus\":" + (status == null ? "null" : "\"" + status + "\"")
+                + ",\"loadEligible\":" + eligible);
+    }
+
+    @Test
+    void aVerifiedIndependentDriverCannotAcceptLoadsAndIsToldWhy() {
+        event("user.status.changed", "ivan", ",\"status\":\"ACTIVE\"");
+        affiliation("ivan", "INDEPENDIENTE", null, false);
+
+        assertThatThrownBy(() -> guard.requireVerified("ivan")).isInstanceOf(AssignmentAccessDeniedException.class)
+                .hasMessageContaining("independiente");
+        assertThat(affiliationTable.get("ivan").isLoadEligible()).isFalse();
+    }
+
+    @Test
+    void aCompanyDriverAcceptsOnlyOnceTheCompanyApprovesTheAffiliation() {
+        event("user.status.changed", "carla", ",\"status\":\"ACTIVE\"");
+        affiliation("carla", "EMPRESA", "PENDIENTE", false);
+        assertThatThrownBy(() -> guard.requireVerified("carla")).hasMessageContaining("aún no aprueba");
+
+        affiliation("carla", "EMPRESA", "RECHAZADA", false);
+        assertThatThrownBy(() -> guard.requireVerified("carla")).hasMessageContaining("rechazó");
+
+        affiliation("carla", "EMPRESA", "ACTIVA", true);
+        assertThatCode(() -> guard.requireVerified("carla")).doesNotThrowAnyException();
+        assertThat(affiliationTable.get("carla").getCompanyName()).isEqualTo("Transportes Andinos");
+    }
+
+    @Test
+    void theAffiliationNeverReplacesTheAccountVerification() {
+        affiliation("pablo", "EMPRESA", "ACTIVA", true);
+        event("user.created", "pablo", ",\"role\":\"CONDUCTOR\"");
+
+        assertThatThrownBy(() -> guard.requireVerified("pablo")).hasMessageContaining("aún no ha sido verificada");
     }
 
     private void event(String type, String userId, String extra) {

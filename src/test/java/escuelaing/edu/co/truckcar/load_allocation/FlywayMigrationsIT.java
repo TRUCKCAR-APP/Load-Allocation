@@ -68,7 +68,7 @@ class FlywayMigrationsIT {
         List<String> applied = jdbc.queryForList(
                 "SELECT version FROM load_allocation.flyway_schema_history WHERE success AND version IS NOT NULL ORDER BY installed_rank",
                 String.class);
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7");
     }
 
     @Test
