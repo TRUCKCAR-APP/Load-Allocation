@@ -87,6 +87,26 @@ class LoadSyncServiceTest {
     }
 
     @Test
+    void pickupMilestonesRecordedOfflineAreAppliedBeforeTheDelivery() {
+        when(ledger.register(anyString(), any(), anyString(), any())).thenReturn(true);
+        Instant arrived = Instant.parse("2026-10-31T15:00:00Z");
+        Instant loaded = Instant.parse("2026-10-31T15:40:00Z");
+        SyncBatchRequest.Event delivered = event(LoadSyncService.TRIP_DELIVERED, Instant.parse("2026-10-31T18:00:00Z"), 3, delivery());
+        SyncBatchRequest.Event pickedUp = event(LoadSyncService.PICKED_UP, loaded, 2, mapper.createObjectNode().put("loadId", 74));
+        SyncBatchRequest.Event arrival = event(LoadSyncService.PICKUP_ARRIVED, arrived, 1, mapper.createObjectNode().put("loadId", 74));
+
+        SyncBatchResponse response = service.process(DRIVER, SyncBatchRequest.builder()
+                .events(List.of(delivered, pickedUp, arrival)).build());
+
+        assertThat(response.getAccepted()).containsExactly(arrival.getClientEventId(), pickedUp.getClientEventId(),
+                delivered.getClientEventId());
+        InOrder order = inOrder(loads);
+        order.verify(loads).arriveAtPickup(74L, DRIVER, LocalDateTime.ofInstant(arrived, ZoneId.systemDefault()));
+        order.verify(loads).completePickup(74L, DRIVER, LocalDateTime.ofInstant(loaded, ZoneId.systemDefault()));
+        order.verify(loads).deliverLoad(eq(74L), eq(DRIVER), any(), any());
+    }
+
+    @Test
     void alreadyIngestedEventIsReportedAsDuplicateWithoutReapplying() {
         when(ledger.register(anyString(), any(), anyString(), any())).thenReturn(false);
         SyncBatchRequest.Event started = event(LoadSyncService.TRIP_STARTED, Instant.now(), 1,

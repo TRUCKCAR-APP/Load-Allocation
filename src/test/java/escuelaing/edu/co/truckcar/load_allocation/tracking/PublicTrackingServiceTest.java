@@ -46,6 +46,7 @@ class PublicTrackingServiceTest {
                 .originCity("Bogotá").originDepartment("Cundinamarca").destinationCity("Cali").destinationDepartment("Valle")
                 .status(LoadStatus.IN_TRANSIT).assignedDriverId("driver-ana").assignedVehiclePlate("TDK-410")
                 .publishedAt(local(NOW.minus(Duration.ofHours(5)))).tripStartedAt(local(NOW.minus(Duration.ofHours(1))))
+                .pickedUpAt(local(NOW.minus(Duration.ofMinutes(30))))
                 .build();
         when(repository.findById(30L)).thenReturn(Optional.of(load));
     }
@@ -96,6 +97,17 @@ class PublicTrackingServiceTest {
         assertThat(view.vehiclePlate()).isEqualTo("TDK-•••");
         assertThat(view.position().latitude()).isEqualTo(4.5);
         assertThat(view.origin().city()).isEqualTo("Bogotá");
+        assertThat(view.pickedUpAt()).isEqualTo(NOW.minus(Duration.ofMinutes(30)));
+    }
+
+    @Test
+    void beforeThePickupTheLabelSaysWhereTheTruckIsGoing() {
+        load.setPickedUpAt(null);
+        assertThat(PublicTrackingService.statusLabel(load)).isEqualTo("Camino al punto de cargue");
+        load.setArrivedAtPickupAt(local(NOW));
+        assertThat(PublicTrackingService.statusLabel(load)).isEqualTo("En el punto de cargue");
+        load.setPickedUpAt(local(NOW));
+        assertThat(PublicTrackingService.statusLabel(load)).isEqualTo("En ruta");
     }
 
     @Test

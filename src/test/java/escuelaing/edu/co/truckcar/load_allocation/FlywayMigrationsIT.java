@@ -68,7 +68,10 @@ class FlywayMigrationsIT {
         List<String> applied = jdbc.queryForList(
                 "SELECT version FROM load_allocation.flyway_schema_history WHERE success AND version IS NOT NULL ORDER BY installed_rank",
                 String.class);
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+        List<String> pickup = jdbc.queryForList("SELECT column_name FROM information_schema.columns WHERE table_schema = 'load_allocation'"
+                + " AND table_name = 'freight_loads' AND column_name IN ('arrived_at_pickup_at', 'picked_up_at')", String.class);
+        assertThat(pickup).containsExactlyInAnyOrder("arrived_at_pickup_at", "picked_up_at");
     }
 
     @Test

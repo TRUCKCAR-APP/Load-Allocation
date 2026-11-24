@@ -25,8 +25,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Aplica en orden (occurredAt, seq) los eventos de viaje que el conductor registró sin señal: trip.started y
- * trip.delivered. Cada evento se registra y aplica en una sola transacción, así un reenvío no lo duplica y una falla a
+ * Aplica en orden (occurredAt, seq) los eventos de viaje que el conductor registró sin señal: trip.started,
+ * trip.pickup_arrived, trip.picked_up y trip.delivered. Cada evento se registra y aplica en una sola transacción, así un reenvío no lo duplica y una falla a
  * mitad del lote no deja eventos aplicados sin registrar (ni al revés).
  */
 @Slf4j
@@ -34,6 +34,8 @@ import java.util.stream.Collectors;
 public class LoadSyncService {
 
     public static final String TRIP_STARTED = "trip.started";
+    public static final String PICKUP_ARRIVED = "trip.pickup_arrived";
+    public static final String PICKED_UP = "trip.picked_up";
     public static final String TRIP_DELIVERED = "trip.delivered";
 
     private static final Comparator<SyncBatchRequest.Event> CHRONOLOGICAL = Comparator
@@ -103,6 +105,8 @@ public class LoadSyncService {
         LocalDateTime occurredAt = LocalDateTime.ofInstant(event.getOccurredAt(), ZoneId.systemDefault());
         switch (event.getKind()) {
             case TRIP_STARTED -> loadService.startTrip(loadId, driverId, occurredAt);
+            case PICKUP_ARRIVED -> loadService.arriveAtPickup(loadId, driverId, occurredAt);
+            case PICKED_UP -> loadService.completePickup(loadId, driverId, occurredAt);
             case TRIP_DELIVERED -> {
                 DeliveryConfirmationRequest pod = deliveryOf(event.getPayload());
                 proofOfDeliveryService.verifyEvidence(loadId, driverId, pod);

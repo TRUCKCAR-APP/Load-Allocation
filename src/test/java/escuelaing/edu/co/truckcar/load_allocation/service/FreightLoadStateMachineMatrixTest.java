@@ -184,6 +184,7 @@ class FreightLoadStateMachineMatrixTest {
                 .publishedAt(LocalDateTime.now().minusHours(1))
                 .assignedAt(status == LoadStatus.AVAILABLE ? null : LocalDateTime.now().minusMinutes(30))
                 .tripStartedAt(status == LoadStatus.IN_TRANSIT ? LocalDateTime.now().minusMinutes(5) : null)
+                .pickedUpAt(status == LoadStatus.IN_TRANSIT ? LocalDateTime.now().minusMinutes(2) : null)
                 .build();
         when(repository.findById(LOAD_ID)).thenReturn(Optional.of(load));
         return load;

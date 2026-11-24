@@ -98,7 +98,7 @@ public class PublicTrackingService {
         return new PublicTrackingResponse(
                 "CARGA-" + load.getId(),
                 load.getStatus().name(),
-                LABELS.getOrDefault(load.getStatus(), load.getStatus().name()),
+                statusLabel(load),
                 load.getCargoDescription(),
                 load.getWeightTons(),
                 new PublicTrackingResponse.Place(load.getOriginCity(), load.getOriginDepartment()),
@@ -106,10 +106,20 @@ public class PublicTrackingService {
                 toInstant(load.getPublishedAt()),
                 toInstant(load.getAssignedAt()),
                 toInstant(load.getTripStartedAt()),
+                toInstant(load.getArrivedAtPickupAt()),
+                toInstant(load.getPickedUpAt()),
                 toInstant(load.getDeliveredAt()),
                 maskPlate(load.getAssignedVehiclePlate()),
                 position,
                 expiresAt);
+    }
+
+    /** En ruta se distingue el tramo hacia el cargue, la carga en el punto de cargue y el viaje con la mercancía. */
+    static String statusLabel(FreightLoad load) {
+        if (load.getStatus() == LoadStatus.IN_TRANSIT && load.getPickedUpAt() == null) {
+            return load.getArrivedAtPickupAt() != null ? "En el punto de cargue" : "Camino al punto de cargue";
+        }
+        return LABELS.getOrDefault(load.getStatus(), load.getStatus().name());
     }
 
     private Instant deliveryLimit(FreightLoad load) {

@@ -102,6 +102,14 @@ public class FreightLoad {
     @Column(name = "trip_started_at")
     private LocalDateTime tripStartedAt;
 
+    /** Llegó al punto de cargue (origen). */
+    @Column(name = "arrived_at_pickup_at")
+    private LocalDateTime arrivedAtPickupAt;
+
+    /** Cargó y salió del punto de cargue hacia el destino. Sin esto no se puede registrar la entrega. */
+    @Column(name = "picked_up_at")
+    private LocalDateTime pickedUpAt;
+
     @Column(name = "delivered_at")
     private LocalDateTime deliveredAt;
 

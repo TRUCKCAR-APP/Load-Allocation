@@ -35,6 +35,8 @@ public interface IFreightLoadService {
     FreightLoadResponse startTrip(Long loadId, String authenticatedUserId);
     /** startedAt: hora del dispositivo (eventos sincronizados desde la cola offline de la PWA). */
     FreightLoadResponse startTrip(Long loadId, String authenticatedUserId, LocalDateTime startedAt);
+    FreightLoadResponse arriveAtPickup(Long loadId, String authenticatedUserId, LocalDateTime arrivedAt);
+    FreightLoadResponse completePickup(Long loadId, String authenticatedUserId, LocalDateTime pickedUpAt);
     FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod);
     FreightLoadResponse deliverLoad(Long loadId, String authenticatedUserId, DeliveryConfirmationRequest pod,
                                     LocalDateTime deliveredAt);

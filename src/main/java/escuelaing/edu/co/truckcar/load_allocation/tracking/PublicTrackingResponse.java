@@ -14,6 +14,8 @@ public record PublicTrackingResponse(
         Instant publishedAt,
         Instant assignedAt,
         Instant tripStartedAt,
+        Instant arrivedAtPickupAt,
+        Instant pickedUpAt,
         Instant deliveredAt,
         String vehiclePlate,
         Position position,
