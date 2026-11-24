@@ -42,4 +42,10 @@ public interface FreightLoadRepository extends JpaRepository<FreightLoad, Long> 
     List<FreightLoad> findTop200ByStatusInOrderByPublishedAtDesc(Collection<LoadStatus> statuses);
 
     List<FreightLoad> findTop200ByOrderByPublishedAtDesc();
+
+    /** Cargas de la flota de una transportadora: las propias y las que llevan (o llevaron) sus conductores. */
+    @Query("SELECT l FROM FreightLoad l WHERE l.ownerCompanyId = :companyId OR l.assignedDriverId IN :drivers"
+            + " ORDER BY l.publishedAt DESC")
+    List<FreightLoad> findCompanyFleetLoads(@Param("companyId") String companyId, @Param("drivers") Collection<String> drivers,
+                                           org.springframework.data.domain.Pageable page);
 }

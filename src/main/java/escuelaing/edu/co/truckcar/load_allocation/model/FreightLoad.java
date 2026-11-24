@@ -129,6 +129,10 @@ public class FreightLoad {
     @Column(name = "pod_has_photo")
     private Boolean podHasPhoto;
 
+    /** Carga propia de una transportadora (id de la empresa en user-identity): solo la llevan sus conductores. */
+    @Column(name = "owner_company_id", length = 64)
+    private String ownerCompanyId;
+
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
 
