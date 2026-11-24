@@ -46,6 +46,8 @@ public class FreightLoadResponse {
     private Integer assignmentAttempts;
     private List<String> discardedDriverIds;
     private LocalDateTime tripStartedAt;
+    private LocalDateTime arrivedAtPickupAt;
+    private LocalDateTime pickedUpAt;
     private LocalDateTime deliveredAt;
     private String podReceiverName;
     private String podReceiverDocument;

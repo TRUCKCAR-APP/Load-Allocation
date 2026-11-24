@@ -107,6 +107,22 @@ public class FreightLoadController {
         return ResponseEntity.ok(service.startTrip(loadId, authenticatedUserId));
     }
 
+    /** IN_TRANSIT: llegó al punto de cargue. Solo el conductor asignado; idempotente. */
+    @PatchMapping("/{loadId}/pickup/arrive")
+    public ResponseEntity<FreightLoadResponse> arriveAtPickup(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.arriveAtPickup(loadId, authenticatedUserId, java.time.LocalDateTime.now()));
+    }
+
+    /** IN_TRANSIT: cargó y sale hacia el destino. Solo el conductor asignado; idempotente. */
+    @PatchMapping("/{loadId}/pickup/complete")
+    public ResponseEntity<FreightLoadResponse> completePickup(
+            @PathVariable Long loadId,
+            @RequestHeader(value = AUTH_USER_HEADER, required = false) String authenticatedUserId) {
+        return ResponseEntity.ok(service.completePickup(loadId, authenticatedUserId, java.time.LocalDateTime.now()));
+    }
+
     // La entrega (PATCH /{loadId}/trip/deliver) y la prueba de entrega están en ProofOfDeliveryController.
 
     /** AVAILABLE | ASSIGNED -> CANCELLED. Solo COORDINADOR o ADMIN (rol propagado por el gateway en X-Auth-Role). */

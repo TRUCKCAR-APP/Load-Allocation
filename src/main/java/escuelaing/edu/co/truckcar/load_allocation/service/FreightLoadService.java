@@ -479,6 +479,48 @@ public class FreightLoadService implements IFreightLoadService {
     }
 
     /**
+     * IN_TRANSIT: el conductor llegó al punto de cargue. Idempotente (un reenvío no cambia la hora registrada).
+     */
+    @Override
+    @Transactional
+    public FreightLoadResponse arriveAtPickup(Long loadId, String authenticatedUserId, LocalDateTime arrivedAt) {
+        requireAssignedDriver(loadId, authenticatedUserId, "registrar la llegada al cargue de");
+        FreightLoad load = requireStatus(loadId, LoadStatus.IN_TRANSIT, "registrar la llegada al cargue");
+        if (load.getArrivedAtPickupAt() != null) {
+            return mapToResponse(load);
+        }
+        load.setArrivedAtPickupAt(withinTimeline(arrivedAt, load.getTripStartedAt(), loadId, "llegada al cargue"));
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "trip.pickup_arrived");
+        log.info("Conductor {} en el punto de cargue de la carga #{}", authenticatedUserId, loadId);
+        return mapToResponse(updated);
+    }
+
+    /**
+     * IN_TRANSIT: cargó y sale hacia el destino. Si no marcó la llegada (sin señal o la omitió) se registra a la misma
+     * hora. Idempotente.
+     */
+    @Override
+    @Transactional
+    public FreightLoadResponse completePickup(Long loadId, String authenticatedUserId, LocalDateTime pickedUpAt) {
+        requireAssignedDriver(loadId, authenticatedUserId, "registrar la recogida de");
+        FreightLoad load = requireStatus(loadId, LoadStatus.IN_TRANSIT, "registrar la recogida");
+        if (load.getPickedUpAt() != null) {
+            return mapToResponse(load);
+        }
+        LocalDateTime notBefore = load.getArrivedAtPickupAt() != null ? load.getArrivedAtPickupAt() : load.getTripStartedAt();
+        LocalDateTime at = withinTimeline(pickedUpAt, notBefore, loadId, "recogida");
+        if (load.getArrivedAtPickupAt() == null) {
+            load.setArrivedAtPickupAt(at);
+        }
+        load.setPickedUpAt(at);
+        FreightLoad updated = repository.save(load);
+        outboxEventService.enqueueLoadEvent(updated, "trip.picked_up");
+        log.info("Carga #{} recogida por el conductor {}", loadId, authenticatedUserId);
+        return mapToResponse(updated);
+    }
+
+    /**
      * La hora que reporta el teléfono en un lote offline se acota entre el hito anterior y ahora: un reloj adelantado o
      * atrasado dejaba salidas en el futuro o anteriores a la asignación, y el seguimiento público mostraba la cronología
      * al revés. Dentro de ese rango se respeta la hora del dispositivo.
@@ -518,12 +560,16 @@ public class FreightLoadService implements IFreightLoadService {
                                            LocalDateTime deliveredAt) {
         requireAssignedDriver(loadId, authenticatedUserId, "entregar");
         FreightLoad load = requireStatus(loadId, LoadStatus.IN_TRANSIT, "registrar la entrega");
+        if (load.getPickedUpAt() == null) {
+            throw new InvalidLoadOperationException("No se puede registrar la entrega de la carga #" + loadId
+                    + ": primero registre que la recogió en el punto de cargue");
+        }
         PodObjectReference signature = pod.getSignature();
         PodObjectReference photo = pod.getPhoto();
         requireOwnedKey(loadId, PodMediaKind.SIGNATURE, signature);
         requireOwnedKey(loadId, PodMediaKind.PHOTO, photo);
         load.setStatus(LoadStatus.DELIVERED);
-        load.setDeliveredAt(withinTimeline(deliveredAt, load.getTripStartedAt(), loadId, "entrega"));
+        load.setDeliveredAt(withinTimeline(deliveredAt, load.getPickedUpAt(), loadId, "entrega"));
         load.setPodReceiverName(pod.getReceiverName().trim());
         load.setPodReceiverDocument(pod.getReceiverDocument());
         load.setPodNotes(pod.getNotes());
@@ -894,6 +940,8 @@ public class FreightLoadService implements IFreightLoadService {
                 .assignmentAttempts(entity.getAssignmentAttempts())
                 .discardedDriverIds(entity.getDiscardedDriverIds() == null ? List.of() : List.copyOf(entity.getDiscardedDriverIds()))
                 .tripStartedAt(entity.getTripStartedAt())
+                .arrivedAtPickupAt(entity.getArrivedAtPickupAt())
+                .pickedUpAt(entity.getPickedUpAt())
                 .deliveredAt(entity.getDeliveredAt())
                 .podReceiverName(entity.getPodReceiverName())
                 .podReceiverDocument(entity.getPodReceiverDocument())

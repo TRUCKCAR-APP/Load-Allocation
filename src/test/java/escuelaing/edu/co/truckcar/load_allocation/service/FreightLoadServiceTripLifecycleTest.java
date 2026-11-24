@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -57,6 +58,8 @@ class FreightLoadServiceTripLifecycleTest {
                 .status(status)
                 .assignmentStatus(assignment)
                 .assignedDriverId(DRIVER)
+                // Una carga en ruta lista para entregar ya pasó por el punto de cargue.
+                .pickedUpAt(status == LoadStatus.IN_TRANSIT ? LocalDateTime.now().minusHours(4) : null)
                 .build();
     }
 
@@ -77,6 +80,15 @@ class FreightLoadServiceTripLifecycleTest {
         assertThat(load.getStatus()).isEqualTo(LoadStatus.IN_TRANSIT);
         assertThat(load.getTripStartedAt()).isNotNull();
 
+        assertThatThrownBy(() -> service.deliverLoad(30L, DRIVER, pod()))
+                .isInstanceOf(InvalidLoadOperationException.class)
+                .hasMessageContaining("primero registre que la recogió");
+        service.arriveAtPickup(30L, DRIVER, null);
+        assertThat(load.getArrivedAtPickupAt()).isNotNull();
+        FreightLoadResponse loaded = service.completePickup(30L, DRIVER, null);
+        assertThat(loaded.getPickedUpAt()).isNotNull();
+        assertThat(loaded.getStatus()).isEqualTo(LoadStatus.IN_TRANSIT);
+
         FreightLoadResponse delivered = service.deliverLoad(30L, DRIVER, pod());
         assertThat(delivered.getStatus()).isEqualTo(LoadStatus.DELIVERED);
         assertThat(delivered.getPodReceiverName()).isEqualTo("Jefe de Bodega Cali");
@@ -84,7 +96,36 @@ class FreightLoadServiceTripLifecycleTest {
         assertThat(delivered.getDeliveredAt()).isNotNull();
 
         verify(outboxEventService).enqueueLoadEvent(load, "trip.started");
+        verify(outboxEventService).enqueueLoadEvent(load, "trip.pickup_arrived");
+        verify(outboxEventService).enqueueLoadEvent(load, "trip.picked_up");
         verify(outboxEventService).enqueueLoadEvent(load, "trip.delivered");
+    }
+
+    /** Recoger sin haber marcado la llegada la registra a la misma hora; repetir no cambia nada ni publica otra vez. */
+    @Test
+    void pickupMilestonesAreIdempotentAndOnlyForTheAssignedDriverInTransit() {
+        FreightLoad load = load(LoadStatus.IN_TRANSIT, AssignmentStatus.ACCEPTED);
+        load.setPickedUpAt(null);
+        load.setTripStartedAt(LocalDateTime.now().minusHours(2));
+        FreightLoadService service = serviceWith(load);
+
+        assertThatThrownBy(() -> service.completePickup(30L, "otro-conductor", null))
+                .isInstanceOf(AssignmentAccessDeniedException.class);
+        LocalDateTime loadedAt = LocalDateTime.now().minusMinutes(30);
+        service.completePickup(30L, DRIVER, loadedAt);
+        assertThat(load.getPickedUpAt()).isEqualTo(loadedAt);
+        assertThat(load.getArrivedAtPickupAt()).isEqualTo(loadedAt);
+
+        service.completePickup(30L, DRIVER, LocalDateTime.now());
+        service.arriveAtPickup(30L, DRIVER, LocalDateTime.now());
+        assertThat(load.getPickedUpAt()).isEqualTo(loadedAt);
+        verify(outboxEventService, times(1)).enqueueLoadEvent(load, "trip.picked_up");
+        verify(outboxEventService, never()).enqueueLoadEvent(load, "trip.pickup_arrived");
+
+        FreightLoadService assigned = serviceWith(load(LoadStatus.ASSIGNED, AssignmentStatus.ACCEPTED));
+        assertThatThrownBy(() -> assigned.arriveAtPickup(30L, DRIVER, null))
+                .isInstanceOf(InvalidLoadOperationException.class)
+                .hasMessageContaining("se esperaba status IN_TRANSIT");
     }
 
     @Test
@@ -274,6 +315,8 @@ class FreightLoadServiceTripLifecycleTest {
         // Salida "antes" de la asignación (reloj atrasado): se registra la hora de asignación.
         service.startTrip(30L, DRIVER, assignedAt.minusHours(5));
         assertThat(load.getTripStartedAt()).isEqualTo(assignedAt);
+        service.completePickup(30L, DRIVER, assignedAt.minusHours(1));
+        assertThat(load.getPickedUpAt()).isEqualTo(assignedAt);
 
         // Entrega "en el futuro" (reloj adelantado): se registra ahora.
         LocalDateTime before = LocalDateTime.now();
