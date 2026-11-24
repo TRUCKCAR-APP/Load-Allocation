@@ -61,6 +61,12 @@ public class GlobalExceptionHandler {
                 ex.getMessage());
     }
 
+    @ExceptionHandler(escuelaing.edu.co.truckcar.load_allocation.company.CompanyLookupUnavailableException.class)
+    public ResponseEntity<ProblemDetail> handleCompanyLookup(
+            escuelaing.edu.co.truckcar.load_allocation.company.CompanyLookupUnavailableException ex) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "service-unavailable", "Servicio no disponible", ex.getMessage());
+    }
+
     @ExceptionHandler(AssignmentAccessDeniedException.class)
     public ResponseEntity<ProblemDetail> handleAccessDenied(AssignmentAccessDeniedException ex) {
         return ex.isUnauthenticated()

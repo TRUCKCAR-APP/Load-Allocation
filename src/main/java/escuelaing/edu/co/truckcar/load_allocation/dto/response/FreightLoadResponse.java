@@ -55,6 +55,8 @@ public class FreightLoadResponse {
     /** La firma y la foto se consultan en GET /loads/{id}/proof-of-delivery. */
     private boolean podHasSignature;
     private boolean podHasPhoto;
+    /** Carga propia de una transportadora: solo la llevan sus conductores. null en las de un generador. */
+    private String ownerCompanyId;
     private LocalDateTime cancelledAt;
     private String cancellationReason;
     private String cancelledBy;

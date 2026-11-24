@@ -43,6 +43,9 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
 truckcar:
+  services:
+    # User-Identity: empresa de la cuenta TRANSPORTADORA (GET /api/v1/companies/me con su token).
+    user-identity-url: ${TRUCKCAR_SERVICES_USER_IDENTITY_URL:http://localhost:8080}
   kafka:
     topic:
       load-events: ${TRUCKCAR_LOAD_EVENTS_TOPIC:truckcar.events.load-allocation}

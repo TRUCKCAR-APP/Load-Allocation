@@ -52,6 +52,14 @@ public class FreightLoadService implements IFreightLoadService {
     private final OutboxEventService outboxEventService;
     private final ProofOfDeliveryMediaRepository podMediaRepository;
 
+    /** Afiliación de cada conductor (carga propia: solo sus conductores). Opcional para no tocar las pruebas. */
+    private escuelaing.edu.co.truckcar.load_allocation.repository.DriverAffiliationRepository affiliations;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setAffiliations(escuelaing.edu.co.truckcar.load_allocation.repository.DriverAffiliationRepository affiliations) {
+        this.affiliations = affiliations;
+    }
+
     @Value("${truckcar.assignment.max-attempts:5}")
     private int maxAssignmentAttempts = 5;
 
@@ -85,6 +93,89 @@ public class FreightLoadService implements IFreightLoadService {
         log.info("Carga publicada #{} por {} ({} Tn)", saved.getId(), saved.getGeneratorCompanyName(), saved.getWeightTons());
 
         return mapToResponse(saved);
+    }
+
+    /**
+     * Carga propia de una transportadora (empresa ya confirmada en User-Identity): la publica su cuenta (dueña como un
+     * generador: la ve y la cancela) y solo se propone a sus conductores con la afiliación ACTIVA.
+     */
+    @Transactional
+    public FreightLoadResponse publishOwnLoad(CreateFreightLoadRequest request, UUID correlationId, String ownerUserId,
+                                              String companyId, String companyName) {
+        FreightLoad load = FreightLoad.builder()
+                .correlationId(correlationId != null ? correlationId : UUID.randomUUID())
+                .generatorCompanyId(ownerUserId)
+                .generatorCompanyName(companyName != null && !companyName.isBlank() ? companyName : request.getGeneratorCompanyName())
+                .ownerCompanyId(companyId)
+                .cargoDescription(request.getCargoDescription())
+                .weightTons(request.getWeightTons())
+                .volumeM3(request.getVolumeM3())
+                .requiredTruckType(request.getRequiredTruckType())
+                .originCity(request.getOriginCity())
+                .originDepartment(request.getOriginDepartment())
+                .originLatitude(request.getOriginLatitude())
+                .originLongitude(request.getOriginLongitude())
+                .destinationCity(request.getDestinationCity())
+                .destinationDepartment(request.getDestinationDepartment())
+                .destinationLatitude(request.getDestinationLatitude())
+                .destinationLongitude(request.getDestinationLongitude())
+                .offeredBudget(request.getOfferedBudget())
+                .status(LoadStatus.AVAILABLE)
+                .publishedAt(LocalDateTime.now())
+                .build();
+        FreightLoad saved = repository.save(load);
+        outboxEventService.enqueueLoadEvent(saved, "load.published");
+        log.info("Carga propia #{} publicada por la transportadora {} ({} Tn)", saved.getId(), companyId, saved.getWeightTons());
+        return mapToResponse(saved);
+    }
+
+    /** Las propias y las que llevan (o llevaron) sus conductores con la afiliación ACTIVA; las 200 más recientes. */
+    @Transactional(readOnly = true)
+    public List<FreightLoadResponse> companyFleetLoads(String companyId) {
+        return repository.findCompanyFleetLoads(companyId, activeDriversOf(companyId),
+                        org.springframework.data.domain.PageRequest.of(0, 200))
+                .stream().map(this::mapToResponse).collect(Collectors.toList());
+    }
+
+    /** Prueba de entrega de una carga de la flota de la empresa (propia o de uno de sus conductores). */
+    @Transactional(readOnly = true)
+    public ProofOfDeliveryResponse companyProofOfDelivery(Long loadId, String companyId) {
+        FreightLoad load = repository.findById(loadId)
+                .orElseThrow(() -> new FreightLoadNotFoundException("No se encontró la carga con ID: " + loadId));
+        boolean own = companyId.equals(load.getOwnerCompanyId());
+        if (!own && !activeDriversOf(companyId).contains(load.getAssignedDriverId())) {
+            throw new AssignmentAccessDeniedException("La carga #" + loadId + " no es de la flota de su empresa", false);
+        }
+        // Acceso ya comprobado para la empresa: se lee como la torre (mismo contenido que ve el generador).
+        return getProofOfDelivery(loadId, load.getAssignedDriverId() != null ? load.getAssignedDriverId() : "empresa", "COORDINADOR");
+    }
+
+    private Set<String> activeDriversOf(String companyId) {
+        Set<String> drivers = new java.util.HashSet<>();
+        if (affiliations != null) {
+            affiliations.findByCompanyIdAndAffiliationStatus(companyId, "ACTIVA")
+                    .forEach(affiliation -> drivers.add(affiliation.getDriverId()));
+        }
+        // IN () vacío no es JPQL válido en todos los motores: un valor que no es un id de conductor.
+        if (drivers.isEmpty()) {
+            drivers.add("-");
+        }
+        return drivers;
+    }
+
+    /** Carga propia: solo conductores de esa empresa con la afiliación ACTIVA (motor y torre por igual). */
+    private void requireOwnCompanyDriver(FreightLoad load, String driverId) {
+        if (load.getOwnerCompanyId() == null) {
+            return;
+        }
+        boolean member = affiliations != null && affiliations.findById(driverId)
+                .filter(a -> load.getOwnerCompanyId().equals(a.getCompanyId()) && "ACTIVA".equals(a.getAffiliationStatus()))
+                .isPresent();
+        if (!member) {
+            throw new InvalidLoadOperationException("La carga #" + load.getId() + " es propia de "
+                    + (load.getGeneratorCompanyName() != null ? load.getGeneratorCompanyName() : "una transportadora")
+                    + ": solo la pueden llevar sus conductores afiliados");
+        }
     }
 
     @Override
@@ -270,6 +361,7 @@ public class FreightLoadService implements IFreightLoadService {
 
     private FreightLoad propose(FreightLoad load, String driverId, String driverName, String vehiclePlate,
                                 String proposedBy) {
+        requireOwnCompanyDriver(load, driverId);
         load.setProposedBy(proposedBy);
         load.setAssignedDriverId(driverId);
         load.setAssignedDriverName(driverName);
@@ -792,6 +884,10 @@ public class FreightLoadService implements IFreightLoadService {
             }
             throw new AssignmentAccessDeniedException("La carga #" + load.getId() + " pertenece a otra empresa generadora", false);
         }
+        // La transportadora ve sus cargas propias aquí; las de su flota, en /loads/fleet (empresa confirmada).
+        if (isOwningGenerator(load, authenticatedUserId, authenticatedRole)) {
+            return;
+        }
         if (CONDUCTOR.equals(authenticatedRole) && authenticatedUserId != null
                 && (authenticatedUserId.equals(load.getAssignedDriverId())
                     || load.getDiscardedDriverIds().contains(authenticatedUserId))) {
@@ -872,7 +968,9 @@ public class FreightLoadService implements IFreightLoadService {
 
     /** El generador es dueño de la carga si la publicó él: su id de usuario es el generatorCompanyId. */
     private boolean isOwningGenerator(FreightLoad load, String authenticatedUserId, String authenticatedRole) {
-        return GENERADOR.equals(authenticatedRole) && authenticatedUserId != null
+        boolean publisher = GENERADOR.equals(authenticatedRole)
+                || ("TRANSPORTADORA".equals(authenticatedRole) && load.getOwnerCompanyId() != null);
+        return publisher && authenticatedUserId != null
                 && authenticatedUserId.equals(load.getGeneratorCompanyId());
     }
 
@@ -948,6 +1046,7 @@ public class FreightLoadService implements IFreightLoadService {
                 .podNotes(entity.getPodNotes())
                 .podHasSignature(Boolean.TRUE.equals(entity.getPodHasSignature()))
                 .podHasPhoto(Boolean.TRUE.equals(entity.getPodHasPhoto()))
+                .ownerCompanyId(entity.getOwnerCompanyId())
                 .cancelledAt(entity.getCancelledAt())
                 .cancellationReason(entity.getCancellationReason())
                 .cancelledBy(entity.getCancelledBy())
